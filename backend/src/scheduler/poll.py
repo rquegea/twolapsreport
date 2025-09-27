@@ -34,6 +34,21 @@ DB_CFG = dict(
     password=os.getenv("POSTGRES_PASSWORD", "postgres"),
 )
 
+def _parse_int_env(name: str) -> int | None:
+    value = os.getenv(name)
+    try:
+        if value is None:
+            return None
+        value = str(value).strip()
+        return int(value) if value else None
+    except Exception:
+        return None
+
+# Filtros opcionales para limitar el polling por mercado/cliente/marca
+POLL_PROJECT_ID = _parse_int_env("POLL_PROJECT_ID")
+POLL_CLIENT_ID = _parse_int_env("POLL_CLIENT_ID")
+POLL_BRAND_ID = _parse_int_env("POLL_BRAND_ID")
+
 def summarize_and_extract_topics(text: str) -> Tuple[str, List[str]]:
     prompt = f"""
 Analiza el siguiente texto y devuelve un objeto JSON con dos claves:
@@ -251,8 +266,30 @@ def main(loop_once: bool = True, sleep_seconds: int = 6 * 3600):
     while True:
         with psycopg2.connect(**DB_CFG) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT id, query, topic, category, client_id, brand_id FROM queries WHERE enabled = TRUE")
-                for query_id, query_text, query_topic, query_category, client_id, brand_id in cur.fetchall():
+                base_sql = (
+                    "SELECT id, query, topic, category, client_id, brand_id, "
+                    "COALESCE(project_id, id) AS project_id "
+                    "FROM queries WHERE enabled = TRUE"
+                )
+                where_clauses = []
+                params: Dict[str, Any] = {}
+                if POLL_PROJECT_ID is not None:
+                    where_clauses.append("COALESCE(project_id, id) = %(pid)s")
+                    params["pid"] = POLL_PROJECT_ID
+                if POLL_CLIENT_ID is not None:
+                    where_clauses.append("client_id = %(cid)s")
+                    params["cid"] = POLL_CLIENT_ID
+                if POLL_BRAND_ID is not None:
+                    where_clauses.append("brand_id = %(bid)s")
+                    params["bid"] = POLL_BRAND_ID
+                sql = base_sql + (" AND " + " AND ".join(where_clauses) if where_clauses else "")
+
+                logging.info(
+                    "Consultando queries con filtros pid=%s, cid=%s, bid=%s",
+                    POLL_PROJECT_ID, POLL_CLIENT_ID, POLL_BRAND_ID,
+                )
+                cur.execute(sql, params)
+                for query_id, query_text, query_topic, query_category, client_id, brand_id, project_id in cur.fetchall():
                     print(f"\n🔍 Buscando menciones para query: {query_text}")
                     for name, fn in (
                         ("gpt-4", lambda q: fetch_response(q, model="gpt-4o-mini")),

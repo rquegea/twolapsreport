@@ -24,9 +24,9 @@ def generate_report_endpoint():
     try:
         payload = request.get_json() or {}
 
-        # Aceptar brand (o project_id), start_date y end_date
-        project_id = payload.get('project_id')
-        brand_name = payload.get('brand') or os.getenv('DEFAULT_BRAND')
+        # Aceptar market/project, client_brand, start_date y end_date
+        project_id = payload.get('project_id') or payload.get('market_id')
+        brand_name = payload.get('brand') or payload.get('client_brand') or os.getenv('DEFAULT_BRAND')
         # Validación estricta de formato YYYY-MM-DD
         def _parse_ymd(value: str) -> datetime:
             return datetime.strptime(value, '%Y-%m-%d').replace(tzinfo=timezone.utc)
@@ -50,14 +50,14 @@ def generate_report_endpoint():
         if start_dt > end_dt:
             return jsonify({"error": "start_date no puede ser posterior a end_date"}), 400
 
-        # Resolver project_id si solo llega brand
+        # Resolver project_id (mercado) si solo llega brand
         if not project_id and brand_name:
             # Lookup sencillo vía SQLAlchemy dentro de aggregator (no modificamos src/):
             from sqlalchemy import text
             from src.reports.aggregator import get_session
             sess = get_session()
             try:
-                row = sess.execute(text("SELECT id FROM queries WHERE COALESCE(brand, topic) = :b ORDER BY id ASC LIMIT 1"), {"b": brand_name}).first()
+                row = sess.execute(text("SELECT COALESCE(project_id, id) FROM queries WHERE COALESCE(brand, topic) = :b ORDER BY id ASC LIMIT 1"), {"b": brand_name}).first()
                 project_id = int(row[0]) if row and row[0] is not None else None
             finally:
                 sess.close()
@@ -65,11 +65,12 @@ def generate_report_endpoint():
         if not project_id:
             return jsonify({"error": "Debe proporcionar 'project_id' o 'brand'."}), 400
 
-        # Generar PDF principal
+        # Generar PDF principal (con fechas y filtro de cliente)
         pdf_bytes = generate_pdf_report(
             int(project_id),
             start_date=start_dt.strftime('%Y-%m-%d'),
             end_date=end_dt.strftime('%Y-%m-%d'),
+            client_brand=brand_name,
         )
 
         return send_file(

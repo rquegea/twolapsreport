@@ -299,27 +299,28 @@ def _synthesize_clusters(cluster_summaries: List[Dict[str, Any]]) -> Dict[str, A
 
 def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = None,
                     save_insights_json: bool = True,
-                    *, start_date: str | None = None, end_date: str | None = None) -> bytes:
+                    *, start_date: str | None = None, end_date: str | None = None,
+                    client_brand: str | None = None) -> bytes:
     session = aggregator.get_session()
     try:
         # 1) Nombre de marca del proyecto (solo para mostrar)
-        kpis_name_only = aggregator.get_kpi_summary(session, project_id)
+        kpis_name_only = aggregator.get_kpi_summary(session, project_id, client_brand=client_brand)
         brand_name = kpis_name_only.get("brand_name") or "Empresa"
 
-        # 2) Métricas y gráficos GLOBALES (todos los topics)
-        #    SOV global por marca
-        sov_pairs = aggregator.get_industry_sov_ranking(session, start_date=start_date, end_date=end_date)
+        # 2) Métricas y gráficos del MERCADO del proyecto
+        #    SOV del mercado actual por marca
+        sov_pairs = aggregator.get_industry_sov_ranking(session, project_id, start_date=start_date, end_date=end_date)
         brand_sov = next((float(v or 0.0) for n, v in sov_pairs if str(n).strip() == str(brand_name).strip()), 0.0)
 
         #    Visibilidad global diaria
-        vis_dates, vis_vals = aggregator.get_visibility_series(session, project_id, start_date=start_date, end_date=end_date)
+        vis_dates, vis_vals = aggregator.get_visibility_series(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         #    Sentimiento: serie diaria de promedio [-1, 1]
-        sent_evo = aggregator.get_sentiment_evolution(session, project_id, start_date=start_date, end_date=end_date)
+        sent_evo = aggregator.get_sentiment_evolution(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         #    Datos por categoría solo para el anexo y gráficos secundarios
-        by_cat = aggregator.get_sentiment_by_category(session, project_id, start_date=start_date, end_date=end_date)
-        top5, bottom5 = aggregator.get_topics_by_sentiment(session, project_id, start_date=start_date, end_date=end_date)
+        by_cat = aggregator.get_sentiment_by_category(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
+        top5, bottom5 = aggregator.get_topics_by_sentiment(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         #    Total de menciones del periodo (todas las queries)
         from sqlalchemy import text as _text
@@ -436,7 +437,7 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
 
     # Nueva: Wordcloud cualitativa reciente (corpus global)
     try:
-        corpus = aggregator.get_all_mentions_for_period(limit=120)
+        corpus = aggregator.get_all_mentions_for_period(limit=120, project_id=project_id, client_brand=brand_name, start_date=start_date, end_date=end_date)
         images["wordcloud"] = plotter.plot_wordcloud_from_corpus(corpus)
     except Exception:
         images["wordcloud"] = None

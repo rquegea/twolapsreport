@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS queries (
     language TEXT DEFAULT 'en'
 );
 
+-- Columnas multi-cliente/mercado (no destructivas)
+ALTER TABLE queries ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE queries ADD COLUMN IF NOT EXISTS client_id INTEGER;
+ALTER TABLE queries ADD COLUMN IF NOT EXISTS brand_id INTEGER;
+ALTER TABLE queries ADD COLUMN IF NOT EXISTS project_id INTEGER;
+
 CREATE TABLE IF NOT EXISTS mentions (
     id SERIAL PRIMARY KEY,
     query_id INTEGER REFERENCES queries(id) ON DELETE CASCADE,
@@ -55,6 +61,28 @@ CREATE TABLE IF NOT EXISTS mentions (
     query_topic TEXT
 );
 
+-- Columnas multi-cliente/mercado en mentions (no destructivas)
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS client_id INTEGER;
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS brand_id INTEGER;
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS poll_id TEXT;
+-- embedding como vector (si pgvector instalado); de lo contrario, usar TEXT
+DO $$
+BEGIN
+    BEGIN
+        ALTER TABLE mentions ADD COLUMN IF NOT EXISTS embedding vector;
+    EXCEPTION WHEN undefined_object THEN
+        -- Si el tipo vector no existe, caer a TEXT
+        PERFORM 1;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'mentions' AND column_name = 'embedding'
+        ) THEN
+            ALTER TABLE mentions ADD COLUMN embedding TEXT;
+        END IF;
+    END;
+END $$;
+
 CREATE TABLE IF NOT EXISTS insights (
     id SERIAL PRIMARY KEY,
     query_id INTEGER REFERENCES queries(id) ON DELETE CASCADE,
@@ -62,6 +90,12 @@ CREATE TABLE IF NOT EXISTS insights (
     -- ... (el resto de tu tabla insights se mantiene igual)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Columnas multi-cliente/mercado en insights (no destructivas)
+ALTER TABLE insights ADD COLUMN IF NOT EXISTS client_id INTEGER;
+ALTER TABLE insights ADD COLUMN IF NOT EXISTS brand_id INTEGER;
+ALTER TABLE insights ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE insights ADD COLUMN IF NOT EXISTS topic TEXT;
 
 -- Índices para optimizar búsquedas
 CREATE INDEX IF NOT EXISTS idx_mentions_query_id ON mentions(query_id);
@@ -75,6 +109,10 @@ CREATE INDEX IF NOT EXISTS idx_mentions_key_topics_gin ON mentions USING GIN (ke
 CREATE INDEX IF NOT EXISTS idx_mentions_model_name ON mentions(model_name);
 CREATE INDEX IF NOT EXISTS idx_mentions_source_domain ON mentions(source_domain);
 CREATE INDEX IF NOT EXISTS idx_mentions_query_topic ON mentions(query_topic);
+CREATE INDEX IF NOT EXISTS idx_queries_project ON queries(project_id);
+CREATE INDEX IF NOT EXISTS idx_mentions_client ON mentions(client_id);
+CREATE INDEX IF NOT EXISTS idx_mentions_brand ON mentions(brand_id);
+CREATE INDEX IF NOT EXISTS idx_mentions_category ON mentions(category);
 CREATE INDEX IF NOT EXISTS idx_insights_query_id ON insights(query_id);
 
 -- FK explícita para generated_insight_id (compatible sin IF NOT EXISTS)

@@ -53,7 +53,7 @@ QUERIES = [
     ("¿Cómo perciben los jóvenes en España la industria audiovisual en términos de prestigio, empleabilidad e innovación?", "The Core School", "Análisis de Marketing y Estrategia", "es"),
 ]
 
-def insert_thecore_queries():
+def insert_thecore_queries(client_id: int | None = None, brand_id: int | None = None, project_id: int | None = None):
     conn = psycopg2.connect(
         host=os.getenv("POSTGRES_HOST", "localhost"),
         port=int(os.getenv("POSTGRES_PORT", 5433)),
@@ -63,23 +63,8 @@ def insert_thecore_queries():
     )
     cur = conn.cursor()
 
-    # BORRAR COMPLETAMENTE todas las queries anteriores
-    print("🗑️ Eliminando TODAS las queries anteriores...")
-    
-    # Primero borrar menciones e insights relacionados (para evitar errores de foreign key)
-    cur.execute("DELETE FROM mentions;")
-    cur.execute("DELETE FROM insights;")
-    # Borrar citations solo si existe
-    try:
-        cur.execute("DELETE FROM citations;")
-    except psycopg2.errors.UndefinedTable:
-        conn.rollback()
-        print("ℹ️ Tabla 'citations' no existe. Continuando…")
-    
-    # Ahora borrar todas las queries
-    cur.execute("DELETE FROM queries;")
-    
-    print("✅ Base de datos limpiada completamente.")
+    # Modo no destructivo: NO borrar datos. Solo asegurar columnas.
+    print("ℹ️ Modo no destructivo: no se eliminarán datos existentes.")
     
     # Añadir columnas si no existen
     try:
@@ -97,8 +82,8 @@ def insert_thecore_queries():
         conn.rollback()
         print("ℹ️ La columna 'category' ya existía.")
 
-    # Insertar las queries de The Core
-    print(f"🎯 Insertando las {len(QUERIES)} queries de The Core School...")
+    # Insertar/actualizar las queries de The Core como mercado 'Escuelas de cine'
+    print(f"🎯 Insertando/actualizando {len(QUERIES)} queries de The Core School para el mercado 'Escuelas de cine'...")
     for i, (query, brand, category, lang) in enumerate(QUERIES, 1):
         # Evitar duplicados de forma portable (sin ON CONFLICT)
         cur.execute("SELECT 1 FROM queries WHERE query = %s", (query,))
@@ -106,14 +91,29 @@ def insert_thecore_queries():
         if not exists:
             cur.execute(
                 """
-                INSERT INTO queries (query, brand, topic, category, language, enabled)
-                VALUES (%s, %s, %s, %s, %s, TRUE)
+                INSERT INTO queries (query, brand, topic, category, language, enabled, client_id, brand_id, project_id)
+                VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s, %s)
                 """,
-                (query, brand, category, category, lang)
+                (query, brand, category, category, lang, client_id, brand_id, project_id)
             )
             print(f"   {i:2d}. {query[:80]}... (+)")
         else:
-            print(f"   {i:2d}. {query[:80]}... (skip)")
+            # Actualizar metadatos de mercado si faltan
+            cur.execute(
+                """
+                UPDATE queries
+                SET category = COALESCE(category, %s),
+                    language = COALESCE(language, %s),
+                    client_id = COALESCE(client_id, %s),
+                    brand_id = COALESCE(brand_id, %s),
+                    project_id = COALESCE(project_id, %s),
+                    brand = COALESCE(brand, %s),
+                    topic = COALESCE(topic, %s)
+                WHERE query = %s
+                """,
+                (category, lang, client_id, brand_id, project_id, brand, category, query)
+            )
+            print(f"   {i:2d}. {query[:80]}... (upd)")
 
     conn.commit()
     print(f"✅ Insertadas las {len(QUERIES)} queries de The Core School correctamente.\n")
@@ -140,9 +140,30 @@ def insert_thecore_queries():
     conn.close()
 
 if __name__ == "__main__":
-    print("🚀 CONFIGURANDO QUERIES DE THE CORE SCHOOL")
+    print("🚀 CONFIGURANDO QUERIES DE THE CORE SCHOOL — mercado: Escuelas de cine")
     print("=" * 60)
-    insert_thecore_queries()
+    # Asignar IDs del mercado actual (puedes ajustar estos IDs según tus tablas/convenciones)
+    # Si aún no tienes tablas de clients/brands/projects, deja None y se insertarán solo en queries.
+    CLIENT_ID = int(os.getenv("DEFAULT_CLIENT_ID", "1")) if os.getenv("DEFAULT_CLIENT_ID") else None
+    BRAND_ID = int(os.getenv("DEFAULT_BRAND_ID", "1")) if os.getenv("DEFAULT_BRAND_ID") else None
+    PROJECT_ID = int(os.getenv("DEFAULT_PROJECT_ID", "1")) if os.getenv("DEFAULT_PROJECT_ID") else None
+    insert_thecore_queries(CLIENT_ID, BRAND_ID, PROJECT_ID)
+    # Backfill suave: asegurar que todas las queries antiguas sin project_id reciben uno por defecto (1)
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=int(os.getenv("POSTGRES_PORT", 5433)),
+            database=os.getenv("POSTGRES_DB", "ai_visibility"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        )
+        cur = conn.cursor()
+        default_pid = PROJECT_ID if PROJECT_ID is not None else 1
+        cur.execute("UPDATE queries SET project_id = COALESCE(project_id, %s)", (default_pid,))
+        conn.commit(); cur.close(); conn.close()
+        print(f"✅ Backfill de project_id aplicado (default={default_pid}).")
+    except Exception as e:
+        print(f"⚠️ No se pudo aplicar backfill de project_id: {e}")
     
     print("\n🎬 ¡Listo! Ahora puedes:")
     print("1. Ejecutar el scheduler: python -c \"from src.scheduler.poll import main; main(loop_once=True)\"")

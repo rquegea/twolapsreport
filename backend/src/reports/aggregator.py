@@ -99,8 +99,12 @@ def get_kpi_summary(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> Dict:
-    where: List[str] = ["q.id = :project_id"]
+    # Aislamiento por mercado: agrupar por COALESCE(project_id, id)
+    where: List[str] = [
+        "COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)"
+    ]
     params: Dict[str, Any] = {"project_id": project_id}
     if start_date:
         where.append("m.created_at >= CAST(:start_date AS date)")
@@ -120,12 +124,15 @@ def get_kpi_summary(
     )
     sov_sql = text(
         """
-        WITH brand_counts AS (
-            SELECT COALESCE(q.brand, q.topic, 'Unknown') AS brand,
-                   COUNT(*) AS cnt
+        WITH scoped AS (
+            SELECT m.id, COALESCE(q.brand, q.topic, 'Unknown') AS brand
             FROM mentions m
             JOIN queries q ON q.id = m.query_id
-            GROUP BY COALESCE(q.brand, q.topic, 'Unknown')
+            WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
+        ), brand_counts AS (
+            SELECT brand, COUNT(*) AS cnt
+            FROM scoped
+            GROUP BY brand
         )
         SELECT brand, cnt FROM brand_counts ORDER BY cnt DESC
         """
@@ -137,7 +144,7 @@ def get_kpi_summary(
     try:
         row = session.execute(sql, params).mappings().first()
         totals = dict(row) if row else {"total_mentions": 0, "sentiment_avg": None}
-        sov_rows = session.execute(sov_sql).mappings().all()
+        sov_rows = session.execute(sov_sql, params).mappings().all()
     finally:
         if own_session:
             session.close()
@@ -149,8 +156,52 @@ def get_kpi_summary(
     finally:
         s2.close()
     brand_name = (brow[0] if brow else "Unknown")
+    if client_brand and str(client_brand).strip():
+        brand_name = str(client_brand).strip()
     brand_cnt = next((r["cnt"] for r in sov_rows if r["brand"] == brand_name), 0)
     sov_pct = round(100.0 * brand_cnt / total_all, 1)
+
+    # Si se solicita filtrar KPIs por cliente, recalcular total y sentimiento para esa marca
+    if client_brand and str(client_brand).strip():
+        session2 = get_session()
+        try:
+            # Preparar sinónimos del cliente
+            syns = [brand_name.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(brand_name, [])]
+            likes = [f"%{s}%" for s in syns]
+            brand_sql = text(
+                f"""
+                WITH rows AS (
+                    SELECT 
+                        COALESCE(m.sentiment, 0) AS sent,
+                        (
+                            EXISTS (
+                                SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
+                                WHERE LOWER(TRIM(kt)) = ANY(:syns)
+                            )
+                            OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
+                            OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                            OR EXISTS (
+                                SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
+                                WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
+                            )
+                        ) AS is_brand
+                    FROM mentions m
+                    JOIN queries q ON q.id = m.query_id
+                    LEFT JOIN insights i ON i.id = m.generated_insight_id
+                    WHERE {' AND '.join(where)}
+                )
+                SELECT 
+                    SUM(CASE WHEN is_brand THEN 1 ELSE 0 END) AS brand_cnt,
+                    AVG(CASE WHEN is_brand THEN sent ELSE NULL END) AS brand_avg
+                FROM rows
+                """
+            )
+            b_row = session2.execute(brand_sql, {**params, "syns": syns, "likes": likes}).first()
+            if b_row is not None:
+                totals["total_mentions"] = int(b_row[0] or 0)
+                totals["sentiment_avg"] = float(b_row[1] or 0.0)
+        finally:
+            session2.close()
     return {
         "total_mentions": int(totals.get("total_mentions") or 0),
         "sentiment_avg": float(totals.get("sentiment_avg") or 0.0),
@@ -166,8 +217,55 @@ def get_sentiment_evolution(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> List[Tuple[str, float]]:
-    where: List[str] = ["q.id = :project_id"]
+    # Si llega client_brand, calcular la media diaria SOLO de menciones de esa marca
+    if client_brand and str(client_brand).strip():
+        params: Dict[str, Any] = {"project_id": project_id}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        # Resolver sinónimos
+        base = str(client_brand).strip()
+        syns = [base.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(base, [])]
+        likes = [f"%{s}%" for s in syns]
+        sql = text(
+            """
+            WITH rows AS (
+                SELECT DATE_TRUNC('day', m.created_at)::date AS d,
+                       COALESCE(m.sentiment, 0) AS sent,
+                       (
+                         EXISTS (
+                           SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
+                           WHERE LOWER(TRIM(kt)) = ANY(:syns)
+                         )
+                         OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
+                         OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                         OR EXISTS (
+                           SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
+                           WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
+                         )
+                       ) AS is_brand
+                FROM mentions m
+                JOIN queries q ON q.id = m.query_id
+                LEFT JOIN insights i ON i.id = m.generated_insight_id
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
+                  AND m.created_at >= CAST(COALESCE(:start_date, '1970-01-01') AS date)
+                  AND m.created_at < (CAST(COALESCE(:end_date, '2999-12-31') AS date) + INTERVAL '1 day')
+            )
+            SELECT d, AVG(CASE WHEN is_brand THEN sent ELSE NULL END) AS avg_s
+            FROM rows
+            GROUP BY d
+            ORDER BY d
+            """
+        )
+        rows = session.execute(sql, {"project_id": project_id, "syns": syns, "likes": likes, "start_date": start_date, "end_date": end_date}).all()
+        return [(r[0].strftime("%Y-%m-%d"), float(r[1] or 0.0)) for r in rows]
+    # Sin client_brand: media diaria del mercado completo
+    where: List[str] = [
+        "COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)"
+    ]
     params: Dict[str, Any] = {"project_id": project_id}
     if start_date:
         where.append("m.created_at >= CAST(:start_date AS date)")
@@ -204,8 +302,56 @@ def get_sentiment_by_category(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> Dict[str, float]:
-    where: List[str] = ["q.id = :project_id"]
+    if client_brand and str(client_brand).strip():
+        base = str(client_brand).strip()
+        syns = [base.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(base, [])]
+        likes = [f"%{s}%" for s in syns]
+        sql = text(
+            """
+            WITH rows AS (
+                SELECT COALESCE((i.payload->>'category'), COALESCE(q.category, q.topic, 'Desconocida')) AS cat,
+                       COALESCE(m.sentiment, 0) AS sent,
+                       (
+                         EXISTS (
+                           SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
+                           WHERE LOWER(TRIM(kt)) = ANY(:syns)
+                         )
+                         OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
+                         OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                         OR EXISTS (
+                           SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
+                           WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
+                         )
+                       ) AS is_brand
+                FROM mentions m
+                JOIN queries q ON q.id = m.query_id
+                LEFT JOIN insights i ON i.id = m.generated_insight_id
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
+                  AND m.created_at >= CAST(COALESCE(:start_date, '1970-01-01') AS date)
+                  AND m.created_at < (CAST(COALESCE(:end_date, '2999-12-31') AS date) + INTERVAL '1 day')
+            )
+            SELECT cat, AVG(CASE WHEN is_brand THEN sent ELSE NULL END) AS avg_s
+            FROM rows
+            GROUP BY cat
+            ORDER BY cat
+            """
+        )
+        own_session = False
+        if session is None:
+            session = get_session()
+            own_session = True
+        try:
+            rows = session.execute(sql, {"project_id": project_id, "start_date": start_date, "end_date": end_date, "syns": syns, "likes": likes}).all()
+        finally:
+            if own_session:
+                session.close()
+        return {str(r[0]): float(r[1] or 0.0) for r in rows}
+    # Sin client_brand: promedio por categoría del mercado
+    where: List[str] = [
+        "COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)"
+    ]
     params: Dict[str, Any] = {"project_id": project_id}
     if start_date:
         where.append("m.created_at >= CAST(:start_date AS date)")
@@ -244,8 +390,59 @@ def get_topics_by_sentiment(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
-    where: List[str] = ["q.id = :project_id"]
+    if client_brand and str(client_brand).strip():
+        base = str(client_brand).strip()
+        syns = [base.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(base, [])]
+        likes = [f"%{s}%" for s in syns]
+        sql = text(
+            """
+            WITH rows AS (
+                SELECT jsonb_array_elements_text(COALESCE(m.key_topics, '[]'::jsonb)) AS topic,
+                       COALESCE(m.sentiment, 0) AS sent,
+                       (
+                         EXISTS (
+                           SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
+                           WHERE LOWER(TRIM(kt)) = ANY(:syns)
+                         )
+                         OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
+                         OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                         OR EXISTS (
+                           SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
+                           WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
+                         )
+                       ) AS is_brand
+                FROM mentions m
+                JOIN queries q ON q.id = m.query_id
+                LEFT JOIN insights i ON i.id = m.generated_insight_id
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
+                  AND m.created_at >= CAST(COALESCE(:start_date, '1970-01-01') AS date)
+                  AND m.created_at < (CAST(COALESCE(:end_date, '2999-12-31') AS date) + INTERVAL '1 day')
+            )
+            SELECT topic, AVG(CASE WHEN is_brand THEN sent ELSE NULL END) AS avg_s, COUNT(*) AS cnt
+            FROM rows
+            GROUP BY topic
+            HAVING COUNT(*) >= 3
+            """
+        )
+        own_session = False
+        if session is None:
+            session = get_session()
+            own_session = True
+        try:
+            rows = session.execute(sql, {"project_id": project_id, "start_date": start_date, "end_date": end_date, "syns": syns, "likes": likes}).all()
+        finally:
+            if own_session:
+                session.close()
+        arr = [(str(r[0]), float(r[1] or 0.0)) for r in rows]
+        arr.sort(key=lambda x: x[1])
+        bottom5 = arr[:5]
+        top5 = arr[-5:][::-1]
+        return top5, bottom5
+    where: List[str] = [
+        "COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)"
+    ]
     params: Dict[str, Any] = {"project_id": project_id}
     if start_date:
         where.append("m.created_at >= CAST(:start_date AS date)")
@@ -323,7 +520,7 @@ def get_share_of_voice_and_trends(
             FROM mentions m
             JOIN queries q ON q.id = m.query_id
             LEFT JOIN insights i ON i.id = m.generated_insight_id
-            WHERE q.id = :project_id
+            WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
               AND m.created_at >= CAST(:start_date AS date)
               AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
             """
@@ -454,6 +651,7 @@ def get_visibility_series(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> tuple[list[str], list[float]]:
     """
     Serie diaria EXACTA de visibilidad (%) replicando /api/visibility (granularity=day).
@@ -465,8 +663,9 @@ def get_visibility_series(
         own_session = True
     try:
         # Resolver marca principal
-        brow = session.execute(text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid"), {"pid": int(project_id)}).first()
-        client_brand = (brow[0] if brow else "Unknown")
+        if client_brand is None or not str(client_brand).strip():
+            brow = session.execute(text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid"), {"pid": int(project_id)}).first()
+            client_brand = (brow[0] if brow else "Unknown")
 
         # Ventana temporal
         if not start_date or not end_date:
@@ -478,7 +677,7 @@ def get_visibility_series(
             end_date = end_dt.strftime("%Y-%m-%d")
 
         # Preparar sinónimos + patrones LIKE
-        syns = [client_brand.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(client_brand, [])]
+        syns = [str(client_brand or "Unknown").lower()] + [s.lower() for s in BRAND_SYNONYMS.get(str(client_brand or "Unknown"), [])]
         likes = [f"%{s}%" for s in syns]
 
         # Replicar lógica del endpoint /api/visibility (granularity=day)
@@ -502,7 +701,8 @@ def get_visibility_series(
                 FROM mentions m
                 JOIN queries q ON q.id = m.query_id
                 LEFT JOIN insights i ON i.id = m.generated_insight_id
-                WHERE m.created_at >= CAST(:start_date AS date)
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+                  AND m.created_at >= CAST(:start_date AS date)
                   AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
             )
             SELECT d,
@@ -514,7 +714,7 @@ def get_visibility_series(
             """
         )
 
-        rows = session.execute(sql, {"start_date": start_date, "end_date": end_date, "syns": syns, "likes": likes}).all()
+        rows = session.execute(sql, {"pid": int(project_id), "start_date": start_date, "end_date": end_date, "syns": syns, "likes": likes}).all()
 
         # Mapear resultados por día
         by_day: Dict[str, tuple[int, int]] = {str(d): (int(b or 0), int(t or 0)) for d, b, t in rows}
@@ -542,6 +742,7 @@ def get_visibility_series(
 
 def get_industry_sov_ranking(
     session: Optional[Session],
+    project_id: Optional[int] = None,
     *,
     start_date: Optional[str],
     end_date: Optional[str],
@@ -553,8 +754,16 @@ def get_industry_sov_ranking(
         own_session = True
     try:
         # Traer también key_topics para replicar la detección del endpoint
+        where = [
+            "m.created_at >= CAST(:start_date AS date)",
+            "m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')",
+        ]
+        params: Dict[str, Any] = {"start_date": start_date or "1970-01-01", "end_date": end_date or "2999-12-31"}
+        if project_id is not None:
+            where.append("COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)")
+            params["pid"] = int(project_id)
         sql = text(
-            """
+            f"""
             SELECT
               m.key_topics,
               LOWER(COALESCE(m.response,'')) AS resp,
@@ -563,11 +772,10 @@ def get_industry_sov_ranking(
             FROM mentions m
             JOIN queries q ON q.id = m.query_id
             LEFT JOIN insights i ON i.id = m.generated_insight_id
-            WHERE m.created_at >= CAST(:start_date AS date)
-              AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
+            WHERE {' AND '.join(where)}
             """
         )
-        rows = session.execute(sql, {"start_date": start_date or "1970-01-01", "end_date": end_date or "2999-12-31"}).mappings().all()
+        rows = session.execute(sql, params).mappings().all()
         from collections import Counter
         counts: Counter[str] = Counter()
         # Sinónimos normalizados (canónico -> lista de variantes en minúsculas)
@@ -686,6 +894,7 @@ def get_sentiment_positive_series(
     *,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    client_brand: Optional[str] = None,
 ) -> list[tuple[str, float]]:
     """Serie diaria del porcentaje de menciones POSITIVAS de la marca principal (0-100%)."""
     own_session = False
@@ -694,10 +903,11 @@ def get_sentiment_positive_series(
         own_session = True
     try:
         # Resolver marca
-        brow = session.execute(text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid"), {"pid": int(project_id)}).first()
-        client_brand = (brow[0] if brow else "Unknown")
-        syns = [client_brand.lower()]
-        syns.extend([s.lower() for s in BRAND_SYNONYMS.get(client_brand, [])])
+        if client_brand is None or not str(client_brand).strip():
+            brow = session.execute(text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid"), {"pid": int(project_id)}).first()
+            client_brand = (brow[0] if brow else "Unknown")
+        syns = [str(client_brand or "Unknown").lower()]
+        syns.extend([s.lower() for s in BRAND_SYNONYMS.get(str(client_brand or "Unknown"), [])])
 
         if not start_date:
             start_date = "1970-01-01"
@@ -725,7 +935,8 @@ def get_sentiment_positive_series(
                 FROM mentions m
                 JOIN queries q ON q.id = m.query_id
                 LEFT JOIN insights i ON i.id = m.generated_insight_id
-                WHERE m.created_at >= CAST(:start_date AS date)
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+                  AND m.created_at >= CAST(:start_date AS date)
                   AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
             )
             SELECT d,
@@ -737,7 +948,7 @@ def get_sentiment_positive_series(
             """
         )
         likes = [f"%{s}%" for s in syns]
-        rows = session.execute(sql, {"syns": syns, "likes": likes, "start_date": start_date, "end_date": end_date}).all()
+        rows = session.execute(sql, {"pid": int(project_id), "syns": syns, "likes": likes, "start_date": start_date, "end_date": end_date}).all()
         series: list[tuple[str, float]] = []
         for d, pos, tot in rows:
             pct = (float(pos or 0) / float(max(tot or 0, 1))) * 100.0
@@ -876,6 +1087,8 @@ def get_all_mentions_for_period(
     end_date: Optional[str] | None = None,
     client_id: Optional[int] | None = None,
     brand_id: Optional[int] | None = None,
+    project_id: Optional[int] | None = None,
+    client_brand: Optional[str] | None = None,
 ) -> List[str]:
     """
     Devuelve un corpus global de menciones (texto crudo) sin filtrar por tema, dentro de un
@@ -917,6 +1130,9 @@ def get_all_mentions_for_period(
         if brand_id is not None:
             where.append("q.brand_id = :brand_id")
             params["brand_id"] = int(brand_id)
+        if project_id is not None:
+            where.append("COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)")
+            params["pid"] = int(project_id)
 
         # Usar CAST(:param AS date) para evitar problemas de parseo de SQLAlchemy/psycopg2
         where_sql = ' AND '.join(where).replace(":start::date", "CAST(:start AS date)").replace(":end::date", "CAST(:end AS date)")
@@ -933,12 +1149,20 @@ def get_all_mentions_for_period(
 
         rows = session.execute(sql, params).all()
         corpus: List[str] = []
+        syns: List[str] = []
+        if client_brand and str(client_brand).strip():
+            base = str(client_brand).strip()
+            syns = [base.lower()] + [s.lower() for s in BRAND_SYNONYMS.get(base, [])]
         for (resp,) in rows:
             if not isinstance(resp, str):
                 continue
             txt = resp.strip()
-            if len(txt) < 40:  # descartar fragmentos demasiado cortos
+            if len(txt) < 40:
                 continue
+            if syns:
+                low = txt.lower()
+                if not any(s in low for s in syns):
+                    continue
             corpus.append(txt)
         return corpus
     finally:
@@ -991,7 +1215,7 @@ def aggregate_clusters_for_report(
         own_session = True
     try:
         where = [
-            "q.id = :project_id",
+            "COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)",
             "m.embedding IS NOT NULL",
         ]
         params: Dict[str, Any] = {"project_id": int(project_id), "lim": int(max_rows)}
@@ -1196,7 +1420,7 @@ def get_competitive_opportunities(
         FROM mentions m
         JOIN queries q ON q.id = m.query_id
         LEFT JOIN insights i ON i.id = m.generated_insight_id
-        WHERE q.id = :project_id
+        WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :project_id), :project_id)
           AND m.created_at >= CAST(:start_date AS date)
           AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
         GROUP BY 1, 2
