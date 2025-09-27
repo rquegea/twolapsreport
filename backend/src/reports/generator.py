@@ -322,16 +322,51 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         by_cat = aggregator.get_sentiment_by_category(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
         top5, bottom5 = aggregator.get_topics_by_sentiment(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
-        #    Total de menciones del periodo (todas las queries)
+        #    Total de menciones del periodo filtradas por mercado y, si procede, por marca del cliente
         from sqlalchemy import text as _text
         s_date = start_date or "1970-01-01"
         e_date = end_date or "2999-12-31"
-        total_mentions_row = session.execute(_text("""
-            SELECT COUNT(*) FROM mentions m
-            WHERE m.created_at >= CAST(:start AS date)
-              AND m.created_at < (CAST(:end AS date) + INTERVAL '1 day')
-        """), {"start": s_date, "end": e_date}).first()
-        total_mentions = int(total_mentions_row[0] if total_mentions_row and total_mentions_row[0] is not None else 0)
+        if client_brand and str(client_brand).strip():
+            base = str(client_brand).strip()
+            syns = [base.lower()]
+            from .aggregator import BRAND_SYNONYMS
+            syns.extend([s.lower() for s in BRAND_SYNONYMS.get(base, [])])
+            likes = [f"%{s}%" for s in syns]
+            total_mentions_row = session.execute(_text("""
+                WITH rows AS (
+                    SELECT 1 AS hit
+                    FROM mentions m
+                    JOIN queries q ON q.id = m.query_id
+                    LEFT JOIN insights i ON i.id = m.generated_insight_id
+                    WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+                      AND m.created_at >= CAST(:start AS date)
+                      AND m.created_at < (CAST(:end AS date) + INTERVAL '1 day')
+                      AND (
+                        EXISTS (
+                          SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
+                          WHERE LOWER(TRIM(kt)) = ANY(:syns)
+                        )
+                        OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
+                        OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                        OR EXISTS (
+                          SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
+                          WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
+                        )
+                      )
+                )
+                SELECT COUNT(*) FROM rows
+            """), {"pid": int(project_id), "start": s_date, "end": e_date, "syns": syns, "likes": likes}).first()
+            total_mentions = int(total_mentions_row[0] if total_mentions_row and total_mentions_row[0] is not None else 0)
+        else:
+            total_mentions_row = session.execute(_text("""
+                SELECT COUNT(*)
+                FROM mentions m
+                JOIN queries q ON q.id = m.query_id
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+                  AND m.created_at >= CAST(:start AS date)
+                  AND m.created_at < (CAST(:end AS date) + INTERVAL '1 day')
+            """), {"pid": int(project_id), "start": s_date, "end": e_date}).first()
+            total_mentions = int(total_mentions_row[0] if total_mentions_row and total_mentions_row[0] is not None else 0)
 
         # 3) Insights del agente para Parte 2
         agent_insights = aggregator.get_agent_insights_data(session, project_id, limit=200)
@@ -674,7 +709,7 @@ def generate_hybrid_report(full_data: Dict[str, Any]) -> bytes:
             sov_rank_img = None
 
         # 2) Sentimiento positivo por día (serie) en una sola columna (sin gráfico derecho)
-        sent_series = agg.get_sentiment_positive_series(session, int(full_data.get("project_id") or 1), start_date=start_date, end_date=end_date)
+        sent_series = agg.get_sentiment_positive_series(session, int(full_data.get("project_id") or 1), start_date=start_date, end_date=end_date, client_brand=brand_name)
         sent_img = plotter.plot_line_series([d for d, _ in sent_series], [float(v) for _, v in sent_series], title="% de menciones positivas", ylabel="Positivo (%)", ylim=(0,100), color="#16a34a")
         sent_dist_img = None
 
