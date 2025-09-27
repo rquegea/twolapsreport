@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: ai_visibility_postgres
+    environment:
+      POSTGRES_DB: ai_visibility
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
