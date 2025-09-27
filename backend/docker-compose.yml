@@ -10,6 +10,8 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Cambiamos la ruta absoluta por una relativa
+      - ./geocore_backup.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped
 
 volumes:
