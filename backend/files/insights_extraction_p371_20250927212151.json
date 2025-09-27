@@ -1,0 +1,91 @@
+{
+  "executive_summary": "El sentimiento general hacia CES es positivo y estable, con un share of voice dominante en el mercado. Sin embargo, hay riesgos significativos debido a la competencia creciente. Se deben aprovechar las oportunidades de crecimiento en el sector audiovisual.",
+  "key_findings": [
+    "El mercado audiovisual en España está en crecimiento, lo que representa una oportunidad para CES.",
+    "CES mantiene un share of voice dominante, pero debe vigilar la competencia creciente.",
+    "La percepción del cliente es positiva, pero hay preocupaciones sobre la estabilidad laboral en el sector."
+  ],
+  "opportunities": [
+    {
+      "opportunity": "Aprovechar el crecimiento del sector audiovisual para atraer estudiantes interesados en carreras creativas.",
+      "impact": "Alto"
+    },
+    {
+      "opportunity": "Expandir programas formativos orientados a nuevas narrativas y formatos digitales.",
+      "impact": "Alto"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Competencia creciente de otras instituciones educativas en el sector audiovisual.",
+      "mitigation": "Diferenciarse mediante programas innovadores y colaboraciones con la industria."
+    },
+    {
+      "risk": "Dependencia excesiva de tendencias de redes sociales que pueden cambiar rápidamente.",
+      "mitigation": "Diversificar canales de captación y fortalecer la propuesta de valor educativa."
+    }
+  ],
+  "recommendations": [
+    "Desarrollar programas educativos en colaboración con plataformas de streaming.",
+    "Implementar campañas de marketing que resalten la conexión de CES con la industria.",
+    "Monitorear continuamente las tendencias del mercado para ajustar la oferta educativa."
+  ],
+  "time_series_analysis": {
+    "global": {
+      "trend": "estable",
+      "anomalies": [
+        {
+          "date": "2025-09-15",
+          "type": "drop",
+          "metric": "sentiment",
+          "note": "Caída en el sentimiento posiblemente debido a preocupaciones sobre estabilidad laboral."
+        },
+        {
+          "date": "2025-09-22",
+          "type": "spike",
+          "metric": "sentiment",
+          "note": "Aumento en el sentimiento coincidiendo con noticias positivas sobre el sector audiovisual."
+        }
+      ],
+      "sentiment_vs_volume": "El volumen de menciones es alto y coincide con un sentimiento generalmente positivo, lo que sugiere una percepción favorable del mercado."
+    },
+    "by_category": [
+      {
+        "category": "Análisis de Competencia",
+        "trend": "estable",
+        "anomalies": [],
+        "sentiment_vs_volume": "El sentimiento es estable, reflejando una percepción constante de la competencia."
+      },
+      {
+        "category": "Análisis de Marketing y Estrategia",
+        "trend": "ascendente",
+        "anomalies": [],
+        "sentiment_vs_volume": "El sentimiento positivo sugiere que las estrategias de marketing están siendo bien recibidas."
+      },
+      {
+        "category": "Análisis de Mercado",
+        "trend": "ascendente",
+        "anomalies": [],
+        "sentiment_vs_volume": "El sentimiento positivo refleja un mercado en crecimiento y oportunidades de expansión."
+      },
+      {
+        "category": "Análisis de Oportunidades",
+        "trend": "estable",
+        "anomalies": [],
+        "sentiment_vs_volume": "El sentimiento refleja oportunidades constantes en el mercado."
+      },
+      {
+        "category": "Análisis de Riesgos",
+        "trend": "estable",
+        "anomalies": [],
+        "sentiment_vs_volume": "El bajo sentimiento indica preocupaciones sobre riesgos potenciales."
+      },
+      {
+        "category": "Competition & Benchmarking",
+        "trend": "ascendente",
+        "anomalies": [],
+        "sentiment_vs_volume": "El sentimiento positivo sugiere una percepción favorable frente a la competencia."
+      }
+    ]
+  }
+}

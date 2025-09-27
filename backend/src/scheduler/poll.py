@@ -15,6 +15,7 @@ from src.engines.serp import get_search_results as fetch_serp_response
 from src.engines.serp import get_search_results_structured
 from src.utils.slack import send_slack_alert
 from src.engines.sentiment_fixed import analyze_sentiment
+from src.reports.aggregator import BRAND_SYNONYMS
 
 
 
@@ -72,6 +73,52 @@ Responde únicamente con el JSON.
         logging.error("❌ Error al generar resumen y temas: %s", e)
         return text[:150] + "...", []
 
+def _detect_competitors(text: str,
+                        title: str | None,
+                        key_topics: List[str] | None,
+                        insights_payload: Dict[str, Any] | None,
+                        client_brand: str | None) -> List[str]:
+    try:
+        resp = (text or "").lower()
+        ttl = (title or "").lower()
+        topics = [str(t).strip().lower() for t in (key_topics or []) if t]
+
+        payload_brands: List[str] = []
+        try:
+            if isinstance(insights_payload, dict):
+                raw_b = insights_payload.get("brands")
+                if isinstance(raw_b, list):
+                    for b in raw_b:
+                        if isinstance(b, dict):
+                            name = (b.get("name") or "").strip().lower()
+                            if name:
+                                payload_brands.append(name)
+                        elif isinstance(b, str):
+                            payload_brands.append(b.strip().lower())
+        except Exception:
+            pass
+
+        client_norm = (client_brand or "").strip().lower()
+        norm_syns: Dict[str, List[str]] = {canon: [canon.lower(), *[s.lower() for s in alts]] for canon, alts in (BRAND_SYNONYMS or {}).items()}
+
+        detected: List[str] = []
+        for canon, syns in norm_syns.items():
+            hit = False
+            for s in syns:
+                if not s:
+                    continue
+                if s in topics:
+                    hit = True; break
+                if s in resp or s in ttl:
+                    hit = True; break
+                if s in payload_brands:
+                    hit = True; break
+            if hit and canon.strip().lower() != client_norm:
+                detected.append(canon)
+        return sorted(set(detected))
+    except Exception:
+        return []
+
 def insert_mention(cur, data: Dict[str, Any]):
     cur.execute(
         """
@@ -85,7 +132,7 @@ def insert_mention(cur, data: Dict[str, Any]):
             input_tokens, output_tokens, price_usd,
             analysis_latency_ms, total_pipeline_ms, error_category,
             source_domain, source_rank, query_text, query_topic, poll_id,
-            client_id, brand_id, category, embedding
+            client_id, brand_id, category, competitors, embedding
         )
         VALUES (
             %(query_id)s, %(engine)s, %(source)s, %(response)s, %(sentiment)s, %(emotion)s,
@@ -97,13 +144,14 @@ def insert_mention(cur, data: Dict[str, Any]):
             %(input_tokens)s, %(output_tokens)s, %(price_usd)s,
             %(analysis_latency_ms)s, %(total_pipeline_ms)s, %(error_category)s,
             %(source_domain)s, %(source_rank)s, %(query_text)s, %(query_topic)s, %(poll_id)s,
-            %(client_id)s, %(brand_id)s, %(category)s, %(embedding)s::vector
+            %(client_id)s, %(brand_id)s, %(category)s, %(competitors)s, %(embedding)s::vector
         )
         RETURNING id
         """,
         {
             **data,
             "key_topics": Json(data.get("key_topics", [])),
+            "competitors": Json(data.get("competitors", [])),
         },
     )
     return cur.fetchone()[0]
@@ -135,7 +183,8 @@ def insert_insights(cur, query_id: int, insights_payload: dict,
 
 def run_engine(name: str, fetch_fn: Callable[[str], Union[str, list]],
                query_id: int, query_text: str, query_topic: str, query_category: str | None,
-               client_id: int | None, brand_id: int | None, cur, poll_id: str) -> None:
+               client_id: int | None, brand_id: int | None, client_brand_name: str | None,
+               cur, poll_id: str) -> None:
     logging.info("▶ %s | query «%s»", name, query_text)
 
     try:
@@ -198,7 +247,7 @@ def run_engine(name: str, fetch_fn: Callable[[str], Union[str, list]],
             return
 
         analysis_start = time.time()
-        summary, key_topics = summarize_and_extract_topics(response_text)
+            summary, key_topics = summarize_and_extract_topics(response_text)
         # Generar embedding para el summary
         embedding = None
         try:
@@ -214,12 +263,59 @@ def run_engine(name: str, fetch_fn: Callable[[str], Union[str, list]],
         analysis_ms = int((time.time() - analysis_start) * 1000)
         
         insight_id = None
+        insights_payload: Dict[str, Any] | None = None
         if name in {"gpt-4", "pplx-7b-chat", "serpapi"}:
             insights_payload = extract_insights(response_text)
             if insights_payload:
                 insight_id = insert_insights(cur, query_id, insights_payload, client_id, brand_id, query_category, query_topic)
 
         alert_triggered = sentiment < SENTIMENT_THRESHOLD
+        competitors_list = _detect_competitors(
+            response_text,
+            source_title,
+            key_topics,
+            insights_payload if isinstance(insights_payload, dict) else None,
+            client_brand_name,
+        )
+
+        # Derivar lista de brands completa (cliente + competidores si aparecen)
+        brands_list: List[str] = []
+        try:
+            # mapear sinónimos a forma canónica
+            norm_syns: Dict[str, List[str]] = {canon: [canon.lower(), *[s.lower() for s in alts]] for canon, alts in (BRAND_SYNONYMS or {}).items()}
+            resp_l = (response_text or "").lower()
+            title_l = (source_title or "").lower()
+            topics_l = [str(t).strip().lower() for t in (key_topics or [])]
+            payload_brands: List[str] = []
+            try:
+                if isinstance(insights_payload, dict):
+                    raw_b = insights_payload.get("brands")
+                    if isinstance(raw_b, list):
+                        for b in raw_b:
+                            if isinstance(b, dict):
+                                name = (b.get("name") or "").strip().lower()
+                                if name:
+                                    payload_brands.append(name)
+                            elif isinstance(b, str):
+                                payload_brands.append(b.strip().lower())
+            except Exception:
+                pass
+
+            detected_all: List[str] = []
+            for canon, syns in norm_syns.items():
+                for s in syns:
+                    if not s:
+                        continue
+                    if s in topics_l or s in resp_l or s in title_l or s in payload_brands:
+                        detected_all.append(canon)
+                        break
+            # incluir explícitamente la marca cliente si existe
+            if client_brand_name and client_brand_name not in detected_all:
+                detected_all.append(client_brand_name)
+            brands_list = sorted(set(detected_all))
+        except Exception:
+            brands_list = []
+
         mention_data = {
             "query_id": query_id, "engine": name, "source": name.lower(), "response": response_text,
             "sentiment": sentiment, "emotion": emotion, "confidence": confidence,
@@ -246,6 +342,8 @@ def run_engine(name: str, fetch_fn: Callable[[str], Union[str, list]],
             "client_id": client_id,
             "brand_id": brand_id,
             "category": query_category,
+            "brands": brands_list,
+            "competitors": competitors_list,
             "embedding": embedding if embedding is not None else None,
         }
 
@@ -268,7 +366,7 @@ def main(loop_once: bool = True, sleep_seconds: int = 6 * 3600):
             with conn.cursor() as cur:
                 base_sql = (
                     "SELECT id, query, topic, category, client_id, brand_id, "
-                    "COALESCE(project_id, id) AS project_id "
+                    "COALESCE(project_id, id) AS project_id, COALESCE(brand, topic, 'Unknown') AS brand_name "
                     "FROM queries WHERE enabled = TRUE"
                 )
                 where_clauses = []
@@ -289,14 +387,14 @@ def main(loop_once: bool = True, sleep_seconds: int = 6 * 3600):
                     POLL_PROJECT_ID, POLL_CLIENT_ID, POLL_BRAND_ID,
                 )
                 cur.execute(sql, params)
-                for query_id, query_text, query_topic, query_category, client_id, brand_id, project_id in cur.fetchall():
+                for query_id, query_text, query_topic, query_category, client_id, brand_id, project_id, brand_name in cur.fetchall():
                     print(f"\n🔍 Buscando menciones para query: {query_text}")
                     for name, fn in (
                         ("gpt-4", lambda q: fetch_response(q, model="gpt-4o-mini")),
                         ("pplx-7b-chat", fetch_perplexity_response),
                         ("serpapi", fetch_serp_response),
                     ):
-                        run_engine(name, fn, query_id, query_text, query_topic, query_category, client_id, brand_id, cur, poll_id)
+                        run_engine(name, fn, query_id, query_text, query_topic, query_category, client_id, brand_id, brand_name, cur, poll_id)
                 conn.commit()
 
         logging.info(f"🛑 Polling cycle finished for poll_id={poll_id}")

@@ -179,7 +179,7 @@ def get_kpi_summary(
                                 WHERE LOWER(TRIM(kt)) = ANY(:syns)
                             )
                             OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
-                            OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                        OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
                             OR EXISTS (
                                 SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
                                 WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
@@ -241,7 +241,8 @@ def get_sentiment_evolution(
                            WHERE LOWER(TRIM(kt)) = ANY(:syns)
                          )
                          OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
-                         OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                          OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                          OR LOWER(TRIM(COALESCE(q.brand, q.topic, ''))) = ANY(:syns)
                          OR EXISTS (
                            SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
                            WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
@@ -680,12 +681,15 @@ def get_visibility_series(
         syns = [str(client_brand or "Unknown").lower()] + [s.lower() for s in BRAND_SYNONYMS.get(str(client_brand or "Unknown"), [])]
         likes = [f"%{s}%" for s in syns]
 
-        # Replicar lógica del endpoint /api/visibility (granularity=day)
+        # Cálculo correcto: % de queries del día donde la marca aparece al menos 1 vez
+        # Paso 1: marcar por mención si hay marca; Paso 2: colapsar a (día, query_id) con ANY marca
+        # Paso 3: por día, contar queries con marca / total de queries
         sql = text(
             """
             WITH rows AS (
                 SELECT 
                     DATE(m.created_at) AS d,
+                    m.query_id AS qid,
                     (
                         EXISTS (
                             SELECT 1 FROM jsonb_array_elements_text(COALESCE(to_jsonb(m.key_topics),'[]'::jsonb)) kt
@@ -693,6 +697,7 @@ def get_visibility_series(
                         )
                         OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
                         OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
+                        OR LOWER(TRIM(COALESCE(q.brand, q.topic, ''))) = ANY(:syns)
                         OR EXISTS (
                             SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
                             WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
@@ -704,11 +709,15 @@ def get_visibility_series(
                 WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
                   AND m.created_at >= CAST(:start_date AS date)
                   AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
+            ), per_query AS (
+                SELECT d, qid, MAX(CASE WHEN is_brand THEN 1 ELSE 0 END) AS any_brand
+                FROM rows
+                GROUP BY d, qid
             )
             SELECT d,
-                   SUM(CASE WHEN is_brand THEN 1 ELSE 0 END) AS brand_cnt,
+                   SUM(any_brand) AS brand_cnt,
                    COUNT(*) AS total_cnt
-            FROM rows
+            FROM per_query
             GROUP BY d
             ORDER BY d
             """
@@ -822,18 +831,27 @@ def get_industry_sov_ranking(
 def get_visibility_ranking(
     session: Optional[Session],
     *,
+    project_id: Optional[int] = None,
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> list[tuple[str, float]]:
-    """Ranking de visibilidad: porcentaje de apariciones por marca sobre total de respuestas."""
+    """Ranking de visibilidad: porcentaje de apariciones por marca sobre total de respuestas, acotado al mercado si se indica project_id."""
     own_session = False
     if session is None:
         session = get_session()
         own_session = True
     try:
         # Traer también key_topics para replicar la detección del endpoint
+        where = [
+            "m.created_at >= CAST(:start_date AS date)",
+            "m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')",
+        ]
+        params: Dict[str, Any] = {"start_date": start_date or "1970-01-01", "end_date": end_date or "2999-12-31"}
+        if project_id is not None:
+            where.append("COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)")
+            params["pid"] = int(project_id)
         sql = text(
-            """
+            f"""
             SELECT
               m.key_topics,
               LOWER(COALESCE(m.response,'')) AS resp,
@@ -842,11 +860,10 @@ def get_visibility_ranking(
             FROM mentions m
             JOIN queries q ON q.id = m.query_id
             LEFT JOIN insights i ON i.id = m.generated_insight_id
-            WHERE m.created_at >= CAST(:start_date AS date)
-              AND m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')
+            WHERE {' AND '.join(where)}
             """
         )
-        rows = session.execute(sql, {"start_date": start_date or "1970-01-01", "end_date": end_date or "2999-12-31"}).mappings().all()
+        rows = session.execute(sql, params).mappings().all()
         from collections import Counter
         total_by_brand: Counter[str] = Counter()
         # Sinónimos normalizados

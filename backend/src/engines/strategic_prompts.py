@@ -89,10 +89,13 @@ def get_main_analyst_prompt(aggregated_data: dict, global_mentions_corpus: list[
 
 def get_insight_extraction_prompt(aggregated_data: dict) -> str:
     data_json = json.dumps(aggregated_data, ensure_ascii=False, default=str)
+    client_name = aggregated_data.get('client_name') or (aggregated_data.get('kpis', {}) or {}).get('brand_name') or "Nuestra marca"
     return (
         "Eres un Analista de Datos y Estratega Senior. "
         "Analiza todos los datos proporcionados y devuelve EXCLUSIVAMENTE un objeto JSON con la estructura especificada. "
         "NO incluyas texto explicativo, comentarios ni markdown, solo el JSON. "
+        f"Marca analizada: '{client_name}'. Usa exactamente ese nombre al referirte a la marca. "
+        "No menciones 'The Core School' ni otras marcas salvo que figuren explícitamente en los datos y no las confundas con el cliente. "
         "Los datos a analizar son:\n\n"
         "```json\n" + data_json + "\n```\n\n"
         "Objetivos de análisis (aplícalos al conjunto global y por categoría cuando existan datos):\n"
@@ -126,13 +129,17 @@ def get_insight_extraction_prompt(aggregated_data: dict) -> str:
     )
 
 
-def get_strategic_summary_prompt(insights_json: dict) -> str:
+def get_strategic_summary_prompt(insights_json: dict, *, client_name: str) -> str:
     executive_summary = insights_json.get("executive_summary", "")
     key_findings = insights_json.get("key_findings", [])
     findings_text = "\n- ".join(key_findings) if key_findings else ""
     return f"""
     **ROL:** Eres un Analista de Inteligencia de Mercado Senior.
     **TAREA:** Redacta la sección "Resumen Ejecutivo y Hallazgos Principales" de un informe estratégico.
+
+    **MARCA:** {client_name}
+    - Centra TODO el texto en {client_name}. No menciones otras marcas salvo que compares explícitamente con competidores.
+    - Si los hallazgos originales mencionan otra marca, reemplaza la referencia por {client_name} si aplica.
 
     **EXECUTIVE SUMMARY (base):**
     {executive_summary}
@@ -145,7 +152,7 @@ def get_strategic_summary_prompt(insights_json: dict) -> str:
     """
 
 
-def get_strategic_plan_prompt(insights_json: dict) -> str:
+def get_strategic_plan_prompt(insights_json: dict, *, client_name: str | None = None) -> str:
     opportunities = insights_json.get("opportunities", [])
     risks = insights_json.get("risks", [])
     recommendations = insights_json.get("recommendations", [])
@@ -155,6 +162,7 @@ def get_strategic_plan_prompt(insights_json: dict) -> str:
     return f"""
     **ROL:** Eres un Estratega de Negocio.
     **TAREA:** Redacta la sección "Plan de Acción Estratégico" conectando oportunidades, riesgos y recomendaciones de forma coherente y priorizada.
+    {('**MARCA:** ' + client_name + ' — Prioriza acciones para esta marca.' ) if client_name else ''}
 
     **OPORTUNIDADES (base):**
     ```json

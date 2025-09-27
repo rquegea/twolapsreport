@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-rows", type=int, default=5000, help="Límite de filas para clustering (full)")
     p.add_argument("--no-insights-json", action="store_true", help="No guardar JSON de insights (full)")
     p.add_argument("--non-interactive", action="store_true", help="No preguntar por mercado/cliente (requiere --project-id y/o --brand)")
+    p.add_argument("--competitors", help="Lista de competidores (separados por coma) para SOV/competencia")
     return p.parse_args()
 
 
@@ -144,12 +145,18 @@ def main() -> int:
                     client_brand = brand_sel
             if project_id is None:
                 raise SystemExit("Debes proporcionar --project-id o seleccionar un mercado interactivamente.")
+            # Parsear competidores si se proporcionan
+            competitors_list = None
+            if args.competitors:
+                competitors_list = [x.strip() for x in str(args.competitors).split(",") if x.strip()]
+
             bytes_pdf = report_generator.generate_report(
                 int(project_id),
                 save_insights_json=(not args.no_insights_json),
                 start_date=args.start_date,
                 end_date=args.end_date,
                 client_brand=client_brand,
+                competitors=competitors_list,
             )
             pdf_bytes = bytes_pdf
 

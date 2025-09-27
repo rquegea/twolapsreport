@@ -20,8 +20,100 @@ def _build_kpi_rows(kpis: Dict) -> List[List[str]]:
     ]
 
 
+def _compact_aggregated_for_prompt(
+    aggregated: Dict[str, Any],
+    *,
+    top_clusters: int = 10,
+    examples_per_cluster: int = 3,
+    max_sov_entries: int = 12,
+    max_series_points: int = 180,
+) -> Dict[str, Any]:
+    """Reduce el tamaño del bundle conservando señal para el LLM.
+    - Prioriza TOP-N clusters por volumen y recorta ejemplos por cluster
+    - Limita longitud de series temporales (últimos puntos)
+    - Recorta tabla SOV a primeras entradas
+    - Reduce buckets de agent_insights para no saturar el prompt
+    """
+    out: Dict[str, Any] = {}
+
+    # KPIs y metadatos clave
+    kpis: Dict[str, Any] = dict(aggregated.get("kpis", {}))
+    if isinstance(kpis.get("sov_table"), list):
+        kpis["sov_table"] = kpis["sov_table"][:max_sov_entries]
+    out["kpis"] = kpis
+    if "client_name" in aggregated:
+        out["client_name"] = aggregated.get("client_name")
+    if "market_competitors" in aggregated:
+        out["market_competitors"] = aggregated.get("market_competitors")
+
+    # Series: quedarnos con la parte más reciente para contexto actual
+    time_series = aggregated.get("time_series") or {}
+    if isinstance(time_series, dict):
+        sent_series = list(time_series.get("sentiment_per_day") or [])
+        if len(sent_series) > max_series_points:
+            sent_series = sent_series[-max_series_points:]
+        out["time_series"] = {"sentiment_per_day": sent_series}
+    vis_series = aggregated.get("visibility_timeseries") or []
+    if isinstance(vis_series, (list, tuple)):
+        vis_list = list(vis_series)
+        if len(vis_list) > max_series_points:
+            vis_list = vis_list[-max_series_points:]
+        out["visibility_timeseries"] = vis_list
+
+    # Agent insights (buckets) con límite por categoría
+    ai = aggregated.get("agent_insights") or {}
+    buckets = {}
+    if isinstance(ai, dict):
+        raw_buckets = ai.get("buckets") or {}
+        if isinstance(raw_buckets, dict):
+            for key in ("opportunities", "risks", "trends", "quotes", "pain_points"):
+                items = raw_buckets.get(key) or []
+                if isinstance(items, list):
+                    buckets[key] = items[:10]
+        out["agent_insights"] = {"buckets": buckets}
+
+    # Clusters: usar crudos si existen; ordenar por volumen y recortar ejemplos
+    clusters = aggregated.get("clusters_raw") or aggregated.get("clusters") or []
+    if isinstance(clusters, list):
+        def _count(c: Dict[str, Any]) -> int:
+            try:
+                return int(c.get("count", 0))
+            except Exception:
+                return 0
+        top = sorted(clusters, key=_count, reverse=True)[:top_clusters]
+        comp: List[Dict[str, Any]] = []
+        for c in top:
+            item: Dict[str, Any] = {
+                "topic_name": c.get("topic_name") or c.get("label"),
+                "count": _count(c),
+                "avg_sentiment": float(c.get("avg_sentiment", 0.0) or 0.0),
+            }
+            ts = c.get("top_sources") or []
+            if isinstance(ts, list):
+                item["top_sources"] = ts[:5]
+            ex = c.get("example_mentions") or []
+            if isinstance(ex, list):
+                item["example_mentions"] = ex[:examples_per_cluster]
+            comp.append(item)
+        out["clusters"] = comp
+
+    # Anexos básicos si vienen ya calculados
+    for k in ("sentiment_by_category", "topics_top5", "topics_bottom5"):
+        if k in aggregated:
+            out[k] = aggregated.get(k)
+
+    return out
+
+
 def _extract_insights_to_json(aggregated: Dict[str, Any]) -> Dict[str, Any]:
-    prompt = s_prompts.get_insight_extraction_prompt(aggregated)
+    compact = _compact_aggregated_for_prompt(
+        aggregated,
+        top_clusters=10,
+        examples_per_cluster=3,
+        max_sov_entries=12,
+        max_series_points=180,
+    )
+    prompt = s_prompts.get_insight_extraction_prompt(compact)
     raw = fetch_response(prompt, model="gpt-4o", temperature=0.2, max_tokens=2048)
     if not raw:
         return {}
@@ -204,7 +296,7 @@ def _generate_full_part2_texts(insights_json: Dict[str, Any], aggregated: Dict[s
         sum_prompt = s_prompts.get_strategic_summary_prompt({
             "executive_summary": insights_json.get("executive_summary", ""),
             "key_findings": insights_json.get("key_findings", []),
-        })
+        }, client_name=brand_name)
         out["summary_and_findings"] = _normalize_section(fetch_response(sum_prompt, model="gpt-4o", temperature=0.3, max_tokens=900), "summary_and_findings")
     except Exception:
         out["summary_and_findings"] = ""
@@ -240,7 +332,7 @@ def _generate_full_part2_texts(insights_json: Dict[str, Any], aggregated: Dict[s
             "opportunities": insights_json.get("opportunities", []),
             "risks": insights_json.get("risks", []),
             "recommendations": insights_json.get("recommendations", []),
-        })
+        }, client_name=brand_name)
         out["action_plan"] = _normalize_section(fetch_response(plan_prompt, model="gpt-4o", temperature=0.3, max_tokens=1100), "action_plan")
     except Exception:
         out["action_plan"] = ""
@@ -300,22 +392,35 @@ def _synthesize_clusters(cluster_summaries: List[Dict[str, Any]]) -> Dict[str, A
 def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = None,
                     save_insights_json: bool = True,
                     *, start_date: str | None = None, end_date: str | None = None,
-                    client_brand: str | None = None) -> bytes:
+                    client_brand: str | None = None, competitors: List[str] | None = None) -> bytes:
     session = aggregator.get_session()
     try:
         # 1) Nombre de marca del proyecto (solo para mostrar)
-        kpis_name_only = aggregator.get_kpi_summary(session, project_id, client_brand=client_brand)
+        #    Usar ventana temporal cuando esté disponible
+        kpis_name_only = aggregator.get_kpi_summary(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
         brand_name = kpis_name_only.get("brand_name") or "Empresa"
 
         # 2) Métricas y gráficos del MERCADO del proyecto
-        #    SOV del mercado actual por marca
-        sov_pairs = aggregator.get_industry_sov_ranking(session, project_id, start_date=start_date, end_date=end_date)
-        brand_sov = next((float(v or 0.0) for n, v in sov_pairs if str(n).strip() == str(brand_name).strip()), 0.0)
+        #    SOV del mercado actual por marca: usar detección robusta a nivel de menciones
+        sov_pairs_all = aggregator.get_industry_sov_ranking(session, project_id, start_date=start_date, end_date=end_date)
+        # Filtrado por competidores si se proporcionan: siempre incluir la marca del cliente
+        comp_set = set([(c or "").strip() for c in (competitors or []) if (c or "").strip()])
+        if comp_set:
+            allowed = {str(brand_name).strip()} | comp_set
+            sov_pairs = [(n, v) for n, v in sov_pairs_all if str(n).strip() in allowed]
+            if not sov_pairs:
+                sov_pairs = [(n, v) for n, v in sov_pairs_all if str(n).strip() == str(brand_name).strip()]
+        else:
+            sov_pairs = list(sov_pairs_all)
+        # Recalcular el SOV del cliente relativo al subset (renormalizando)
+        total_subset_pct = float(sum(float(v or 0.0) for _, v in sov_pairs)) or 1.0
+        brand_pct_all = next((float(v or 0.0) for n, v in sov_pairs_all if str(n).strip() == str(brand_name).strip()), 0.0)
+        brand_sov = round((brand_pct_all / total_subset_pct) * 100.0, 1)
 
         #    Visibilidad global diaria
         vis_dates, vis_vals = aggregator.get_visibility_series(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
-        #    Sentimiento: serie diaria de promedio [-1, 1]
+        #    Sentimiento: serie diaria de promedio [-1, 1] FILTRADO por la marca seleccionada
         sent_evo = aggregator.get_sentiment_evolution(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         #    Datos por categoría solo para el anexo y gráficos secundarios
@@ -380,7 +485,11 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
     sentiment_avg = (sum(v for _, v in sent_evo) / max(len(sent_evo), 1)) if sent_evo else 0.0
 
     # Derivar lista simple de competidores desde la tabla de SOV
-    competitors_list = [str(n) for n, _ in sov_pairs if str(n).strip() != str(brand_name).strip()]
+    # Competidores para prompts: respetar subconjunto si llegó
+    if comp_set:
+        competitors_list = [n for n, _ in sov_pairs if str(n).strip() != str(brand_name).strip()]
+    else:
+        competitors_list = [str(n) for n, _ in sov_pairs if str(n).strip() != str(brand_name).strip()]
 
     aggregated: Dict[str, Any] = {
         "kpis": {
@@ -461,6 +570,7 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         vis_img = plotter.plot_line_series(vis_dates, vis_vals, title="Puntuación de visibilidad", ylabel="Visibilidad (%)", ylim=(0, 100), color="#000000")
     except Exception:
         vis_img = None
+
     images = {
         "sentiment_evolution": sent_img,
         "part1_visibility_line": vis_img,
@@ -719,7 +829,7 @@ def generate_hybrid_report(full_data: Dict[str, Any]) -> bytes:
             vis_line_img = plotter.plot_visibility_series(vis_dates, vis_vals)
         except Exception:
             vis_line_img = None
-        vis_rank_pairs = agg.get_visibility_ranking(session, start_date=start_date, end_date=end_date)
+        vis_rank_pairs = agg.get_visibility_ranking(session, project_id=pid, start_date=start_date, end_date=end_date)
         try:
             items = [f"{i+1}. {n} — {v:.1f}%" for i, (n, v) in enumerate(vis_rank_pairs[:10])]
             import matplotlib.pyplot as plt

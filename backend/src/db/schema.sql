@@ -130,3 +130,35 @@ BEGIN
             ON DELETE SET NULL;
     END IF;
 END $$;
+
+-- Columna de competidores detectados automáticamente en menciones
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS competitors JSONB;
+
+-- Índice GIN para acelerar consultas por competidores
+CREATE INDEX IF NOT EXISTS idx_mentions_competitors_gin ON mentions USING GIN (competitors);
+
+-- Columna de marcas detectadas (todas) en menciones
+ALTER TABLE mentions ADD COLUMN IF NOT EXISTS brands JSONB;
+CREATE INDEX IF NOT EXISTS idx_mentions_brands_gin ON mentions USING GIN (brands);
+
+-- Vista materializada con el universo de marcas por mercado/proyecto
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = 'project_brands'
+    ) THEN
+        EXECUTE 'CREATE MATERIALIZED VIEW project_brands AS
+            SELECT
+              COALESCE(q.project_id, q.id) AS project_id,
+              jsonb_array_elements_text(COALESCE(m.brands, ''[]''::jsonb)) AS brand,
+              MIN(m.created_at) AS first_seen,
+              MAX(m.created_at) AS last_seen,
+              COUNT(*) AS mention_count
+            FROM mentions m
+            JOIN queries q ON q.id = m.query_id
+            WHERE jsonb_array_length(COALESCE(m.brands, ''[]''::jsonb)) > 0
+            GROUP BY 1, 2';
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_project_brands_project ON project_brands(project_id)';
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_project_brands_brand ON project_brands(brand)';
+    END IF;
+END $$;
