@@ -1325,6 +1325,7 @@ def get_full_report_data(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     max_rows: int = 5000,
+    client_brand: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Devuelve un objeto híbrido con KPIs + series + SOV + clusters (con ejemplos) listo
@@ -1333,11 +1334,11 @@ def get_full_report_data(
     session = get_session()
     try:
         # KPIs y métricas (aplicar rango temporal si viene informado)
-        kpis = get_kpi_summary(session, project_id, start_date=start_date, end_date=end_date)
-        evo = get_sentiment_evolution(session, project_id, start_date=start_date, end_date=end_date)
-        by_cat = get_sentiment_by_category(session, project_id, start_date=start_date, end_date=end_date)
-        top5, bottom5 = get_topics_by_sentiment(session, project_id, start_date=start_date, end_date=end_date)
-        sov_trends = get_share_of_voice_and_trends(session, project_id, start_date=start_date, end_date=end_date)
+        kpis = get_kpi_summary(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
+        evo = get_sentiment_evolution(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
+        by_cat = get_sentiment_by_category(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
+        top5, bottom5 = get_topics_by_sentiment(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
+        sov_trends = get_share_of_voice_and_trends(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         # Clusters
         clusters = aggregate_clusters_for_report(session, project_id, start_date=start_date, end_date=end_date, max_rows=max_rows)
@@ -1358,7 +1359,7 @@ def get_full_report_data(
         )
 
         # Serie global de visibilidad para el dashboard
-        visibility_series = get_visibility_series(session, project_id, start_date=start_date, end_date=end_date)
+        visibility_series = get_visibility_series(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
         return {
             "project_id": project_id,

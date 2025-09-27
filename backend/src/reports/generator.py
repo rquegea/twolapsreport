@@ -654,7 +654,9 @@ def generate_hybrid_report(full_data: Dict[str, Any]) -> bytes:
     # 1) SOV global (pie) y ranking (lista)
     session = agg.get_session();
     try:
-        sov_pairs = agg.get_industry_sov_ranking(session, start_date=start_date, end_date=end_date)
+        # Usar el project_id del bundle para limitar el ranking al mercado seleccionado
+        pid = int(full_data.get("project_id") or 1)
+        sov_pairs = agg.get_industry_sov_ranking(session, project_id=pid, start_date=start_date, end_date=end_date)
         sov_img = plotter.plot_sov_pie([(name, val) for name, val in sov_pairs[:10]])
         # Render ranking como tabla simple en imagen: reutilizamos barh con porcentajes
         try:
@@ -677,7 +679,7 @@ def generate_hybrid_report(full_data: Dict[str, Any]) -> bytes:
         sent_dist_img = None
 
         # 3) Visibilidad por día y ranking
-        vis_dates, vis_vals = agg.get_visibility_series(session, int(full_data.get("project_id") or 1), start_date=start_date, end_date=end_date)
+        vis_dates, vis_vals = agg.get_visibility_series(session, int(full_data.get("project_id") or 1), start_date=start_date, end_date=end_date, client_brand=brand_name)
         try:
             vis_line_img = plotter.plot_visibility_series(vis_dates, vis_vals)
         except Exception:
