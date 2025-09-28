@@ -222,9 +222,10 @@ def build_strategic_pdf(
     # Sección 2: Análisis Cuantitativo y Correlaciones
     pdf.add_page()
     add_title(pdf, "Sección 2: Análisis Cuantitativo y Correlaciones")
-    if images.get("mentions_volume"):
-        add_title(pdf, "Tendencias: Volumen de Menciones")
-        add_image(pdf, images.get("mentions_volume"))
+    # Preferir Sentimiento por Categoría; si no existe, no mostrar gráfico (opción B)
+    if images.get("sentiment_by_category"):
+        add_title(pdf, "Tendencias: Sentimiento por categoría")
+        add_image(pdf, images.get("sentiment_by_category"))
     deep_text = (narrative.get("analisis_profundo") or "").strip()
     if deep_text:
         add_title(pdf, "Correlaciones Transversales (Análisis Profundo)")
@@ -578,13 +579,16 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
                 if text:
                     add_paragraph(pdf, text)
             elif s == "Tendencias y Señales Emergentes":
-                # Gráfico de volumen con caption de base y fuente
+                # Preferir gráfico de sentimiento por categoría para alinear visual con el texto
                 try:
                     total_m = ((strategic.get("kpis") or {}).get("total_mentions") if isinstance(strategic.get("kpis"), dict) else None)
                     caption = f"Base: {total_m if total_m is not None else 'N/D'} menciones | Fuente: Geocore (DB) + motores IA"
                 except Exception:
                     caption = "Fuente: Geocore (DB) + motores IA"
-                add_chart_with_caption(pdf, images.get("mentions_volume"), caption=caption, width=180)
+                img_sent_cat = images.get("sentiment_by_category")
+                if img_sent_cat:
+                    add_chart_with_caption(pdf, img_sent_cat, caption=caption, width=180)
+                # Si no hay datos adecuados, no insertar gráfico (opción B)
                 text = (strategic.get("trends") or "").strip()
                 if text:
                     add_paragraph(pdf, text)

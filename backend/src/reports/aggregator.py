@@ -28,8 +28,7 @@ BRAND_SYNONYMS: Dict[str, List[str]] = {
         "entertainment science school",
         "entertainment science",
     ],
-    # Mantener entradas existentes
-    "The Core School": ["the core", "the core school", "thecore"],
+    # Mantener entradas existentes (sin duplicar canónicos de The Core)
     "U-TAD": ["u-tad", "utad"],
     "ECAM": ["ecam"],
     "TAI": ["tai"],
@@ -158,6 +157,24 @@ def get_kpi_summary(
     finally:
         if own_session:
             session.close()
+    # Normalizar nombres de marca en la tabla SOV (unificar sinónimos bajo canónico)
+    from collections import Counter as _Counter
+    counts_norm: _Counter[str] = _Counter()
+    for r in sov_rows:
+        bname = str(r["brand"]) if r.get("brand") is not None else "Unknown"
+        low = bname.strip().lower()
+        canon_name = None
+        try:
+            for canon, alts in BRAND_SYNONYMS.items():
+                variants = [canon.lower()] + [s.lower() for s in alts]
+                if low in variants:
+                    canon_name = canon
+                    break
+        except Exception:
+            canon_name = None
+        key = canon_name or bname
+        counts_norm[key] += int(r.get("cnt") or 0)
+    sov_rows = [{"brand": k, "cnt": v} for k, v in counts_norm.most_common()]
     total_all = sum(r["cnt"] for r in sov_rows) or 1
     proj_brand_sql = text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid")
     s2 = get_session()
@@ -517,6 +534,17 @@ def get_share_of_voice_and_trends(
             brow = session.execute(text("SELECT COALESCE(brand, topic, 'Unknown') AS b FROM queries WHERE id=:pid"), {"pid": project_id}).first()
             client_brand = (brow[0] if brow else "Unknown")
 
+        # Canonicalizar la marca del cliente a su forma oficial si coincide con algún sinónimo
+        try:
+            low = str(client_brand or "").strip().lower()
+            for canon, alts in BRAND_SYNONYMS.items():
+                variants = [canon.lower()] + [s.lower() for s in alts]
+                if low in variants:
+                    client_brand = canon
+                    break
+        except Exception:
+            pass
+
         sql = text(
             """
             SELECT
@@ -643,6 +671,8 @@ def get_share_of_voice_and_trends(
                 "sentiment_delta_total": float(current.get("average_sentiment", 0.0)) - float(prev.get("average_sentiment", 0.0)),
                 "sov_delta_by_category": sov_delta_by_category,
                 "competitor_mentions_delta": competitor_mentions_delta,
+                # Nuevo: delta total de SOV del cliente (puntos porcentuales)
+                "sov_delta_total": float(current.get("share_of_voice", 0.0)) - float(prev.get("share_of_voice", 0.0)),
             }
 
         return {
@@ -1417,6 +1447,80 @@ def get_full_report_data(
         # Serie global de visibilidad para el dashboard
         visibility_series = get_visibility_series(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
 
+        # Correlaciones básicas y anomalías (pre-cálculo estadístico)
+        # Alinear series por fecha para correlación sentimiento vs volumen
+        try:
+            mv_series = get_mentions_volume_series(session, project_id, start_date=start_date, end_date=end_date)
+        except Exception:
+            mv_series = []
+        try:
+            sent_map = {d: float(v) for d, v in (evo or [])}
+            vol_map = {d: int(c) for d, c in (mv_series or [])}
+            common = sorted(set(sent_map.keys()) & set(vol_map.keys()))
+            x = np.array([float(vol_map[d]) for d in common], dtype=float)
+            y = np.array([float(sent_map[d]) for d in common], dtype=float)
+            if x.size >= 3 and float(np.std(x)) > 1e-9 and float(np.std(y)) > 1e-9:
+                r = float(np.corrcoef(x, y)[0, 1])
+            else:
+                r = None
+            basic_correlations = {
+                "sentiment_vs_mentions": {
+                    "pearson_r": r,
+                    "n": int(x.size),
+                }
+            }
+        except Exception:
+            basic_correlations = {}
+
+        # Detección de anomalías día a día
+        anomalies: list[dict] = []
+        try:
+            # Volumen: variaciones > 20% en un día
+            for i in range(1, len(mv_series)):
+                d_prev, c_prev = mv_series[i-1]
+                d_curr, c_curr = mv_series[i]
+                try:
+                    c_prev_f = float(c_prev or 0.0)
+                    c_curr_f = float(c_curr or 0.0)
+                    if c_prev_f <= 0.0:
+                        continue
+                    pct = (c_curr_f - c_prev_f) / c_prev_f
+                    if abs(pct) >= 0.20:
+                        anomalies.append({
+                            "date": str(d_curr),
+                            "metric": "menciones",
+                            "magnitude": f"{pct:+.0%}",
+                            "reason_hint": "Variación diaria >20% en volumen",
+                        })
+                except Exception:
+                    continue
+            # Sentimiento: cambios absolutos > 0.20 en un día
+            for i in range(1, len(evo)):
+                d_prev, s_prev = evo[i-1]
+                d_curr, s_curr = evo[i]
+                try:
+                    delta = float(s_curr) - float(s_prev)
+                    if abs(delta) >= 0.20:
+                        anomalies.append({
+                            "date": str(d_curr),
+                            "metric": "sentimiento",
+                            "magnitude": f"{delta:+.2f}",
+                            "reason_hint": "Variación diaria >0.20 en sentimiento",
+                        })
+                except Exception:
+                    continue
+        except Exception:
+            anomalies = []
+
+        # Periodo anterior (metadatos) si procede
+        previous_period: dict[str, str] = {}
+        try:
+            if start_date and end_date:
+                p0, p1 = _compute_previous_period(start_date, end_date)
+                previous_period = {"start_date": p0, "end_date": p1}
+        except Exception:
+            previous_period = {}
+
         return {
             "project_id": project_id,
             "kpis": kpis,
@@ -1428,6 +1532,9 @@ def get_full_report_data(
             "topics_top5": top5,
             "topics_bottom5": bottom5,
             "sov": sov_trends,
+            "correlations": basic_correlations,
+            "anomalies": anomalies,
+            "previous_period": previous_period,
             "clusters": clusters,
             "competitive_opportunities": competitive_opps,
         }
