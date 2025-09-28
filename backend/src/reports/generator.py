@@ -399,6 +399,17 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         #    Usar ventana temporal cuando esté disponible
         kpis_name_only = aggregator.get_kpi_summary(session, project_id, start_date=start_date, end_date=end_date, client_brand=client_brand)
         brand_name = kpis_name_only.get("brand_name") or "Empresa"
+        # Canonicalizar la marca a su forma oficial si coincide con sinónimos
+        try:
+            from .aggregator import BRAND_SYNONYMS
+            low = str(brand_name).strip().lower()
+            for canon, alts in BRAND_SYNONYMS.items():
+                variants = [canon.lower()] + [s.lower() for s in alts]
+                if low in variants:
+                    brand_name = canon
+                    break
+        except Exception:
+            pass
 
         # 2) Métricas y gráficos del MERCADO del proyecto
         #    SOV del mercado actual por marca: usar detección robusta a nivel de menciones
@@ -571,6 +582,15 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
     except Exception:
         vis_img = None
 
+    # Volumen de menciones (para Tendencias)
+    try:
+        mv_series = aggregator.get_mentions_volume_series(None, project_id, start_date=start_date, end_date=end_date)
+        mv_dates = [d for d, _ in mv_series]
+        mv_counts = [int(c) for _, c in mv_series]
+        mentions_vol_img = plotter.plot_mentions_volume(mv_dates, mv_counts)
+    except Exception:
+        mentions_vol_img = None
+
     images = {
         "sentiment_evolution": sent_img,
         "part1_visibility_line": vis_img,
@@ -578,6 +598,7 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         # Anexos
         "sentiment_by_category": plotter.plot_sentiment_by_category(by_cat),
         "topics_top_bottom": plotter.plot_topics_top_bottom(top5, bottom5),
+        "mentions_volume": mentions_vol_img,
     }
 
     # Nueva: Wordcloud cualitativa reciente (corpus global)
@@ -646,10 +667,17 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         "strategic": {
             "executive_summary": strategic_sections.get("executive_summary", ""),
             "summary_and_findings": strategic_sections.get("summary_and_findings", ""),
-            "competitive_analysis": strategic_sections.get("competitive_analysis", ""),
+            # Filtrar secciones banales
+            "competitive_analysis": ("" if "incrementar el presupuesto" in (strategic_sections.get("competitive_analysis", "").lower()) else strategic_sections.get("competitive_analysis", "")),
             "trends": strategic_sections.get("trends", ""),
             "correlations": strategic_sections.get("correlations", ""),
-            "action_plan": strategic_sections.get("action_plan", ""),
+            "action_plan": ("" if "incrementar el presupuesto" in (strategic_sections.get("action_plan", "").lower()) else strategic_sections.get("action_plan", "")),
+            # Metadatos para ficha técnica y captions
+            "kpis": aggregated.get("kpis", {}),
+            "period": {"start": start_date, "end": end_date},
+            "competitors": competitors_list,
+            "ai_engines": ["OpenAI GPT-4o"],
+            "scope": "Nacional",
         },
     }
 

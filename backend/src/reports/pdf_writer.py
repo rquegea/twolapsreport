@@ -80,6 +80,11 @@ def _sanitize(text: str) -> str:
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
+    # Correcciones ortográficas simples
+    try:
+        text = text.replace("participació", "participación")
+    except Exception:
+        pass
     try:
         text = text.encode("latin-1", errors="ignore").decode("latin-1")
     except Exception:
@@ -119,6 +124,20 @@ def add_table(pdf: ReportPDF, rows: List[List[str]]):
             pdf.multi_cell(col_widths[i], 6, _sanitize(str(cell)), border=1, ln=3, max_line_height=pdf.font_size)
         pdf.ln(0)
     pdf.ln(3)
+
+
+def add_chart_with_caption(pdf: ReportPDF, path: Optional[str], *, caption: str | None = None, width: float = 180):
+    if not path:
+        return
+    try:
+        pdf.image(path, w=width)
+        pdf.ln(1)
+        if caption:
+            pdf.set_font("Helvetica", size=8)
+            pdf.multi_cell(0, 5, _sanitize(caption))
+            pdf.ln(1)
+    except Exception:
+        pass
 
 
 def add_agent_insights_section(pdf: ReportPDF, agent_summary: Dict[str, str], raw_buckets: Dict[str, list] | None = None):
@@ -478,6 +497,36 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
     _write_index_block("Parte 1: Resumen Visual y KPIs", parte1)
     _write_index_block("Parte 2: Informe Estratégico", parte2)
 
+    # Ficha técnica
+    try:
+        pdf.add_page()
+        add_title(pdf, "Ficha técnica")
+        meta = strategic or {}
+        k = (meta.get("kpis") or {}) if isinstance(meta, dict) else {}
+        total_m = k.get("total_mentions")
+        period = meta.get("period") or {}
+        competitors = meta.get("competitors") or []
+        ai_engines = meta.get("ai_engines") or ["OpenAI GPT-4o"]
+        scope = meta.get("scope") or "Nacional"
+        definitions = meta.get("definitions") or {
+            "Sentimiento": "Promedio diario en [-1, 1] de menciones atribuibles a la marca.",
+            "Mención": "Registro textual asociado a queries del mercado (prensa, redes o foros si el dataset lo contiene).",
+            "Share of Voice (SOV)": "Porcentaje de la conversación del periodo atribuible a la marca frente al total con marca detectada.",
+            "Visibilidad": "Serie diaria (0–100%) que indica el % de consultas del día donde la marca aparece al menos una vez.",
+        }
+        add_paragraph(pdf, f"- Tipo: Análisis de conversación y percepción de marca")
+        add_paragraph(pdf, f"- Periodo: {period.get('start','N/D')} a {period.get('end','N/D')}")
+        add_paragraph(pdf, f"- Ámbito: {scope}")
+        add_paragraph(pdf, f"- Menciones totales: {total_m if total_m is not None else 'N/D'}")
+        add_paragraph(pdf, f"- Competidores incluidos: {', '.join(competitors) if competitors else 'N/D'}")
+        add_paragraph(pdf, f"- Motores de IA: {', '.join(ai_engines)}")
+        add_title(pdf, "Definiciones")
+        if isinstance(definitions, dict):
+            for kdef, vdef in definitions.items():
+                add_paragraph(pdf, f"- {kdef}: {vdef}")
+    except Exception:
+        pass
+
     # 3) Secciones: cabeceras + contenido de Parte 1 cuando aplique
     def _write_section_page(title: str):
         pdf.add_page()
@@ -529,6 +578,13 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
                 if text:
                     add_paragraph(pdf, text)
             elif s == "Tendencias y Señales Emergentes":
+                # Gráfico de volumen con caption de base y fuente
+                try:
+                    total_m = ((strategic.get("kpis") or {}).get("total_mentions") if isinstance(strategic.get("kpis"), dict) else None)
+                    caption = f"Base: {total_m if total_m is not None else 'N/D'} menciones | Fuente: Geocore (DB) + motores IA"
+                except Exception:
+                    caption = "Fuente: Geocore (DB) + motores IA"
+                add_chart_with_caption(pdf, images.get("mentions_volume"), caption=caption, width=180)
                 text = (strategic.get("trends") or "").strip()
                 if text:
                     add_paragraph(pdf, text)

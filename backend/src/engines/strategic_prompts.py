@@ -1,7 +1,20 @@
 import json
 
+# Bloque común de reglas para rigor analítico y anti-alucinación
+ANTI_HALLUCINATION_FOOTER = (
+    "\n\n**REGLAS DE RIGOR (Obligatorias):**\n"
+    "- Usa exclusivamente los datos proporcionados. No inventes cifras ni entidades.\n"
+    "- Si falta un dato, escribe 'Dato no disponible'.\n"
+    "- Cita la fuente del dato entre paréntesis (ej. 'KPIs', 'SOV por categoría').\n"
+    "- Declara supuestos y posibles confusores; marca confianza de hipótesis: Alta|Media|Baja.\n"
+)
+
+DEFAULT_CLIENT_NAME = "Nuestra marca"
 
 def get_detailed_category_prompt(category_name: str, category_data: list, all_summaries: list, kpis: dict) -> str:
+    """
+    Nivel Doctorado (Generalista): Exige un análisis causal y predictivo para la categoría, aplicable a cualquier mercado.
+    """
     data_json = json.dumps(category_data, indent=2, ensure_ascii=False, default=str)
     summaries_text = "\n- ".join(list(set(all_summaries)))
 
@@ -11,148 +24,146 @@ def get_detailed_category_prompt(category_name: str, category_data: list, all_su
     _sov_pct = (_client / _total * 100.0) if _total > 0 else 0.0
 
     prompt = f"""
-    **ROL:** Eres un Analista de Inteligencia de Mercado Senior.
-    **TAREA:** Redacta un resumen ejecutivo para la sección de un informe. Interpreta los datos, no te limites a listarlos. **Integra las métricas clave (KPIs) de forma natural en tu análisis** para dar un contexto cuantitativo.
-    
-    **SECCIÓN A ANALIZAR:** "{category_name}"
+    **ROL:** Eres un Director de Investigación de Mercados con un doctorado en comportamiento del consumidor y dinámicas de mercado. Tu análisis debe ser incisivo, profundo y contraintuitivo.
 
-    **KPIs GENERALES DEL PERIODO:**
-    - Menciones totales analizadas: {kpis.get('total_mentions', 'N/A')}
-    - Sentimiento general promedio: {kpis.get('average_sentiment', 0.0):.2f} (en una escala de -1 a 1)
-    - SOV de esta sección (cliente / total en %): {_sov_pct:.2f}%
+    **TAREA:** Realizar un diagnóstico estratégico para la categoría "{category_name}". No te limites a describir los datos; tu objetivo es desvelar la dinámica subyacente del mercado, identificar las causas raíz y formular una hipótesis estratégica validable.
 
-    **DATOS DETALLADOS DE ESTA SECCIÓN:**
+    **CONTEXTO Analítico:**
+    - **Categoría de Análisis:** "{category_name}"
+    - **KPIs de Referencia (Mercado General):**
+      - Menciones Totales: {kpis.get('total_mentions', 'N/A')}
+      - Sentimiento Promedio General: {kpis.get('average_sentiment', 0.0):.2f}
+    - **KPIs Específicos de esta Categoría:**
+      - Share of Voice (SOV) en la Categoría: {_sov_pct:.2f}%
+
+    **DATOS BRUTOS DE LA CATEGORÍA (para tu análisis fundamental):**
     ```json
     {data_json}
     ```
 
-    **RESUMEN GLOBAL DE TODOS LOS TEMAS DETECTADOS (para contexto):**
+    **SÍNTESIS DE TEMAS GLOBALES (para identificar correlaciones y anomalías):**
     - {summaries_text}
 
-    **INSTRUCCIÓN:**
-    Basándote en TODOS los datos proporcionados, escribe un párrafo de análisis de entre 120 y 180 palabras para la sección "{category_name}". Cubre: contexto de mercado, competencia (incluye SOV si aplica) y sentimiento. Compara el sentimiento de esta sección con el promedio general cuando aporte valor. Termina con 1 recomendación práctica.
+    **INSTRUCCIONES DE ANÁLISIS AVANZADO:**
+    1.  **Análisis Causal (El "Porqué"):** No te limites a decir "el sentimiento es bajo". Explica *por qué*. ¿Está correlacionado con menciones a competidores específicos? ¿Coincide con el lanzamiento de un producto? ¿Refleja una preocupación latente en el mercado (ej. precio, calidad, servicio al cliente)? Utiliza los datos para fundamentar tu hipótesis.
+    2.  **Diagnóstico Competitivo:** Evalúa el SOV. Un {_sov_pct:.2f}% ¿es una posición de liderazgo, de desafío o de nicho? ¿Quién domina la conversación y con qué narrativa? Identifica una vulnerabilidad clave del líder en esta categoría que pueda ser explotada.
+    3.  **Insight Estratégico y Recomendación Accionable:** Basado en tu análisis, destila UN insight principal y potente. A continuación, propón UNA recomendación estratégica concreta y original, no una generalidad.
+        - **Ejemplo de mala recomendación:** "Mejorar el contenido en esta área".
+        - **Ejemplo de buena recomendación:** "Lanzar una micro-campaña de 'thought leadership' enfocada en [NECESIDAD DETECTADA], utilizando [FORMATO ESPECÍFICO] para contrarrestar la narrativa de [ATRIBUTO] del competidor X, que actualmente domina el 60% de la conversación en esta categoría".
+
+    **FORMATO DE SALIDA:**
+    Redacta un párrafo de análisis denso y ejecutivo (aproximadamente 150-200 palabras) que siga la estructura lógica de tus instrucciones: diagnóstico causal, evaluación competitiva y conclusión con una recomendación estratégica de alto impacto.
     """
     return prompt
 
 
 def get_main_analyst_prompt(aggregated_data: dict, global_mentions_corpus: list[str]) -> str:
     """
-    Analista Principal al estilo twolaps: integra KPIs + corpus global de menciones
-    para producir un ÚNICO JSON con todos los textos del informe y selección de temas.
-
-    Salida esperada (JSON estricto, sin markdown):
-    {
-      "headline": "...",
-      "evaluacion_general": "...",
-      "analisis_profundo": "...",
-      "analisis_competencia": "...",
-      "analisis_mercado": "...",
-      "cualitativo_global": {
-        "sintesis_del_hallazgo": "...",
-        "causa_raiz": "...",
-        "citas_destacadas": ["...", "..."]
-      },
-      "deep_dive_temas": ["tema 1", "tema 2", "tema 3"]
-    }
+    Nivel Doctorado (Generalista): Demanda la creación de una narrativa estratégica unificada a partir de datos dispersos.
     """
     data_json = json.dumps(aggregated_data, ensure_ascii=False, indent=2, default=str)
     corpus = "\n\n".join([str(m)[:4000] for m in (global_mentions_corpus or []) if isinstance(m, str)])
     return (
-        "Actúa como Analista Principal (Chief Insights Analyst) híbrido, cuantitativo y cualitativo. "
-        "Tu misión es sintetizar KPIs, tendencias y el corpus literal de menciones para redactar el Dossier Ejecutivo.\n\n"
-        "INSTRUCCIONES CLAVE:\n"
-        "1) Integra KPIs (series, SOV, sentimiento), ranking de competidores y temas clave.\n"
-        "2) Usa el CORPUS GLOBAL para validar hallazgos y extraer citas representativas (textuales).\n"
-        "3) Entrega textos listos para el informe: titular, evaluación general, análisis profundo (con correlaciones),\n"
-        "   análisis de competencia y análisis de mercado.\n"
-        "4) Devuelve también un bloque cualitativo global (síntesis, causa raíz y 3-6 citas).\n"
-        "5) Selecciona 2-3 temas críticos para posibles deep dives.\n"
-        "6) Responde EXCLUSIVAMENTE con el JSON pedido. SIN markdown, SIN comentarios, SIN texto adicional.\n\n"
-        "DATOS CUANTITATIVOS (JSON):\n" + data_json + "\n\n"
-        "CORPUS GLOBAL DE MENCIONES (texto literal, truncado si es largo):\n" + corpus + "\n\n"
-        "FORMATO DE SALIDA (JSON ESTRICTO):\n"
+        "**ROL:** Actúa como un Chief Strategy Officer (CSO). Tu especialidad es la síntesis de inteligencia de mercado cuantitativa y cualitativa para formular la narrativa estratégica que guiará las decisiones del próximo trimestre."
+        "Tu audiencia es el comité de dirección; valora la claridad, la audacia y la justificación basada en datos.\n\n"
+        "**MISIÓN:** Analiza la totalidad de los datos (KPIs, series temporales, SOV, temas y el corpus de menciones textuales) para construir un 'Dossier Estratégico Ejecutivo'. No eres un mero reportero de datos, eres un intérprete y un estratega. Tu entregable final debe ser un único objeto JSON que contenga esta narrativa estratégica.\n\n"
+        "**MARCO DE ANÁLISIS ESTRATÉGICO:**\n"
+        "1.  **Síntesis Holística:** Ve más allá de los datos individuales. Conecta los puntos: ¿cómo un pico en el volumen de menciones (dato cuantitativo) se explica por las conversaciones específicas encontradas en el corpus (dato cualitativo)? ¿Una caída en el sentimiento se correlaciona con la campaña de un competidor?\n"
+        "2.  **Extracción de 'Second-Order Insights':** El primer insight es lo que el dato dice. El segundo es lo que el dato *significa* para el negocio. Enfócate en el segundo.\n"
+        "3.  **Validación Cualitativa:** Usa el CORPUS GLOBAL como evidencia principal. Cada afirmación estratégica debe estar, implícita o explícitamente, respaldada por la voz del cliente extraída del corpus. Extrae citas que no solo sean representativas, sino que encapsulen la tensión o la emoción del momento.\n"
+        "4.  **Identificación de Oportunidades y Amenazas Estratégicas:** Tu análisis debe culminar en la identificación de 2-3 temas que representen las mayores oportunidades o amenazas existenciales para la marca en el corto y medio plazo.\n\n"
+        "**DATOS CUANTITATIVOS (JSON):**\n" + data_json + "\n\n"
+        "**CORPUS GLOBAL DE MENCIONES (Evidencia Cualitativa Primaria):\n" + corpus + "\n\n"
+        "**FORMATO DE SALIDA (JSON ESTRICTO - SIN EXCEPCIONES):\n"
         "{\n"
-        "  \"headline\": \"Titular conciso que conecte dato + porqué\",\n"
-        "  \"evaluacion_general\": \"Conclusión ejecutiva del periodo y drivers principales.\",\n"
-        "  \"analisis_profundo\": \"2-4 párrafos conectando KPIs, temas y competencia; incluye correlaciones.\",\n"
-        "  \"analisis_competencia\": \"Lectura de SOV y movimientos competitivos relevantes.\",\n"
-        "  \"analisis_mercado\": \"Lectura de temas clave y señales de mercado (oportunidades/amenazas).\",\n"
-        "  \"cualitativo_global\": {\n"
-        "    \"sintesis_del_hallazgo\": \"3-5 frases que sinteticen el insight global basado en menciones.\",\n"
-        "    \"causa_raiz\": \"Hipótesis de causa raíz con soporte del corpus.\",\n"
-        "    \"citas_destacadas\": [\"cita 1\", \"cita 2\", \"cita 3\"]\n"
+        '  "headline": "Titular estratégico que resuma la principal tensión u oportunidad del mercado en una frase impactante.",\n'
+        '  "evaluacion_general": "Diagnóstico ejecutivo del periodo. ¿Estamos ganando o perdiendo terreno y por qué? ¿Cuál es la fuerza dominante (interna o externa) que ha marcado este periodo?",\n'
+        '  "analisis_profundo": "Análisis detallado de las dinámicas clave. Conecta las series temporales con los temas emergentes y las acciones de la competencia. Formula hipótesis causales claras y argumentadas.",\n'
+        '  "analisis_competencia": "Lectura estratégica del panorama competitivo. ¿Quién está ganando la narrativa y en qué frentes? ¿Dónde se encuentran las vulnerabilidades de nuestros competidores que podemos explotar?",\n'
+        '  "analisis_mercado": "Análisis de las corrientes de fondo del mercado. ¿Qué necesidades no cubiertas o frustraciones emergen del corpus? ¿Qué tendencias son pasajeras y cuáles estructurales?",\n'
+        '  "cualitativo_global": {\n'
+        '    "sintesis_del_hallazgo": "El insight cualitativo más profundo extraído del corpus, redactado en 3-5 frases.",\n'
+        '    "causa_raiz": "Tu hipótesis principal sobre la causa raíz del comportamiento observado en el mercado, basada en la evidencia del corpus.",\n'
+        '    "citas_destacadas": ["Cita que encapsule la emoción principal", "Cita que revele una necesidad latente", "Cita que ilustre la percepción de un competidor"]\n'
         "  },\n"
-        "  \"deep_dive_temas\": [\"Tema 1\", \"Tema 2\"]\n"
+        '  "deep_dive_temas": ["Tema 1: El más urgente/crítico", "Tema 2: El de mayor potencial a largo plazo"]\n'
         "}"
     )
 
 
 def get_insight_extraction_prompt(aggregated_data: dict) -> str:
+    """
+    Nivel Doctorado (Generalista): Impone un marco de análisis riguroso para la extracción de insights.
+    """
     data_json = json.dumps(aggregated_data, ensure_ascii=False, default=str)
-    client_name = aggregated_data.get('client_name') or (aggregated_data.get('kpis', {}) or {}).get('brand_name') or "Nuestra marca"
+    client_name = aggregated_data.get('client_name') or (aggregated_data.get('kpis', {}) or {}).get('brand_name') or DEFAULT_CLIENT_NAME
     return (
-        "Eres un Analista de Datos y Estratega Senior. "
-        "Analiza todos los datos proporcionados y devuelve EXCLUSIVAMENTE un objeto JSON con la estructura especificada. "
-        "NO incluyas texto explicativo, comentarios ni markdown, solo el JSON. "
-        f"Marca analizada: '{client_name}'. Usa exactamente ese nombre al referirte a la marca. "
-        "No menciones 'The Core School' ni otras marcas salvo que figuren explícitamente en los datos y no las confundas con el cliente. "
-        "Los datos a analizar son:\n\n"
+        f"**ROL:** Eres un Científico de Datos especializado en modelado predictivo y análisis causal. Tu tarea es deconstruir los datos de mercado para extraer insights estructurados y accionables, listos para ser consumidos por una IA estratega.\n\n"
+        f"**MARCA OBJETIVO:** '{client_name}'. Todas las conclusiones deben gravitar en torno a esta marca.\n\n"
+        "**DATOS DE ENTRADA:**\n"
         "```json\n" + data_json + "\n```\n\n"
-        "Objetivos de análisis (aplícalos al conjunto global y por categoría cuando existan datos):\n"
-        "1) Serie temporal - tendencia: Describe si el sentimiento y el volumen son ascendentes, descendentes, estables o volátiles.\n"
-        "2) Anomalías: Identifica picos/caídas significativas; indica fechas y magnitud (aprox.).\n"
-        "3) Cruce Sentimiento vs Volumen: Explica si aumentos de conversación coinciden con caídas de sentimiento (o viceversa).\n"
-        "4) Hipótesis: Aporta explicaciones plausibles de las anomalías (p.ej. campaña de competidor, noticia, lanzamiento).\n"
-        "5) Conclusiones estratégicas: Resume oportunidades, riesgos y un plan de acción concreto.\n\n"
-        "Estructura esperada del JSON de salida (rellena con tu análisis):\n\n"
+        "**METODOLOGÍA DE ANÁLISIS (Obligatoria):**\n"
+        "1.  **Análisis de Series Temporales:**\n"
+        "-   **Tendencia y Volatilidad:** No solo describas la tendencia (ascendente/descendente), cuantifícala (ej. 'tendencia ascendente moderada de +0.15 en sentimiento') y califica su volatilidad.\n"
+        "-   **Detección de Anomalías y Puntos de Inflexión:** Identifica los picos y valles más significativos. Para cada uno, especifica la fecha, la métrica, la magnitud del cambio (ej. '+30% en volumen') y la hipótesis causal más probable.\n"
+        "-   **Análisis de Correlación (Sentimiento vs. Volumen):** Determina la naturaleza de la relación. ¿Es una correlación positiva (más ruido, mejor sentimiento), negativa (crisis) o no hay correlación aparente?\n"
+        "2.  **Diagnóstico Estratégico:**\n"
+        "-   **Hallazgos Clave:** Transforma los datos en tres conclusiones estratégicas fundamentales. Cada hallazgo debe responder a la pregunta: '¿Qué es lo más importante que el negocio necesita saber sobre el mercado, la competencia y sus propios clientes?'\n"
+        "-   **Matriz de Oportunidades/Riesgos:** Identifica oportunidades y riesgos. Para cada uno, evalúa su **Impacto** (Alto, Medio, Bajo) y su **Probabilidad** (Alta, Media, Baja).\n"
+        "-   **Recomendaciones Tácticas:** Deriva un conjunto de acciones concretas, directas y medibles a partir de tu análisis. Prohíbe las generalidades.\n\n"
+        "**FORMATO DE SALIDA (JSON ESTRICTO - SIN TEXTO ADICIONAL):**\n\n"
         "{\n"
-        "  \"executive_summary\": \"2-3 frases con lo más crítico y útil para negocio.\",\n"
-        "  \"time_series_analysis\": {\n"
-        "    \"global\": {\n"
-        "      \"trend\": \"ascendente|descendente|estable|volátil\",\n"
-        "      \"anomalies\": [ { \"date\": \"YYYY-MM-DD\", \"type\": \"spike|drop\", \"metric\": \"mentions|sentiment\", \"note\": \"breve explicación\" } ],\n"
-        "      \"sentiment_vs_volume\": \"breve explicación del cruce\"\n"
-        "    },\n"
-        "    \"by_category\": [\n"
-        "      { \"category\": \"Nombre\", \"trend\": \"...\", \"anomalies\": [ ... ], \"sentiment_vs_volume\": \"...\" }\n"
-        "    ]\n"
+        '  "executive_summary": "Una síntesis de 2-3 frases que capture el insight más crítico y su implicación de negocio.",\n'
+        '  "time_series_analysis": {\n'
+        '    "global": {\n'
+        '      "trend": "Descripción cuantificada de la tendencia y volatilidad.",\n'
+        '      "anomalies": [ { "date": "YYYY-MM-DD", "type": "pico|valle", "metric": "menciones|sentimiento", "magnitude": "ej. +30% o -0.5", "causal_hypothesis": "Hipótesis explicativa" } ],\n'
+        '      "sentiment_vs_volume_correlation": "Descripción de la correlación observada."\n'
+        "    }\n"
         "  },\n"
-        "  \"key_findings\": [\n"
-        "    \"Un hallazgo importante sobre el mercado (basado en series y KPIs).\",\n"
-        "    \"Otro hallazgo relevante sobre la competencia (SOV, picos, etc.).\",\n"
-        "    \"Un tercer hallazgo sobre la percepción del cliente.\"\n"
+        '  "key_findings": [\n'
+        '    "Hallazgo 1 sobre el mercado.",\n'
+        '    "Hallazgo 2 sobre la competencia.",\n'
+        '    "Hallazgo 3 sobre la percepción de la marca."\n'
         "  ],\n"
-        "  \"opportunities\": [ { \"opportunity\": \"Descripción\", \"impact\": \"Alto|Medio|Bajo\" } ],\n"
-        "  \"risks\": [ { \"risk\": \"Descripción\", \"mitigation\": \"Acción\" } ],\n"
-        "  \"recommendations\": [ \"Acción 1\", \"Acción 2\", \"Acción 3\" ]\n"
+        '  "opportunities": [ { "opportunity": "Descripción de la oportunidad", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja" } ],\n'
+        '  "risks": [ { "risk": "Descripción del riesgo", "mitigation": "Acción específica de mitigación", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja" } ],\n'
+        '  "recommendations": [ "Acción medible 1", "Acción medible 2", "Acción medible 3" ]\n'
         "}"
-    )
+    ) + ANTI_HALLUCINATION_FOOTER
 
 
 def get_strategic_summary_prompt(insights_json: dict, *, client_name: str) -> str:
+    """
+    Nivel Doctorado (Generalista): Enfocado en la redacción de un narrativo persuasivo y ejecutivo.
+    """
     executive_summary = insights_json.get("executive_summary", "")
     key_findings = insights_json.get("key_findings", [])
     findings_text = "\n- ".join(key_findings) if key_findings else ""
     return f"""
-    **ROL:** Eres un Analista de Inteligencia de Mercado Senior.
-    **TAREA:** Redacta la sección "Resumen Ejecutivo y Hallazgos Principales" de un informe estratégico.
+    **ROL:** Eres un Comunicador Estratégico y Asesor de C-Level. Tu habilidad es transformar datos complejos en una narrativa clara, concisa y persuasiva que inspire a la acción.
 
-    **MARCA:** {client_name}
-    - Centra TODO el texto en {client_name}. No menciones otras marcas salvo que compares explícitamente con competidores.
-    - Si los hallazgos originales mencionan otra marca, reemplaza la referencia por {client_name} si aplica.
+    **TAREA:** Redactar la sección "Resumen Ejecutivo y Hallazgos Principales" de un informe estratégico para la marca **{client_name}**.
 
-    **EXECUTIVE SUMMARY (base):**
-    {executive_summary}
+    **MATERIAL DE BASE:**
+    - **Síntesis Ejecutiva Preliminar:** {executive_summary}
+    - **Hallazgos Clave Aislados:**
+      - {findings_text}
 
-    **HALLAZGOS PRINCIPALES:**
-    - {findings_text}
+    **INSTRUCCIONES DE COMUNICACIÓN ESTRATÉGICA:**
+    1.  **Crea una Narrativa, no una Lista:** No enumeres los hallazgos. Teje una historia coherente. Empieza con la conclusión más importante (el `executive_summary`) y luego utiliza los `key_findings` como los pilares argumentales que la sostienen.
+    2.  **Enfoque '¿Y qué?':** Para cada hallazgo, responde implícitamente a la pregunta '¿Y qué significa esto para el negocio?'. Transforma cada punto de datos en una implicación estratégica.
+    3.  **Lenguaje de Decisión:** Utiliza un lenguaje activo y directo. Evita la voz pasiva y la jerga técnica. El objetivo es facilitar la toma de decisiones, no demostrar la complejidad del análisis.
+    4.  **Foco Absoluto en {client_name}:** Todo el análisis debe estar centrado en {client_name}. La competencia solo se menciona para dar contexto a la posición de nuestra marca.
 
-    **INSTRUCCIÓN:**
-    Redacta entre 2 y 3 párrafos claros y concisos que sinteticen el estado del mercado, la competencia y la percepción del cliente, utilizando el executive summary y los hallazgos como base. Evita repetir literalmente las viñetas; integra y sintetiza.
-    """
-
+    **FORMATO DE SALIDA:**
+    Entre 2 y 3 párrafos de prosa ejecutiva. El texto debe fluir lógicamente y ser inmediatamente comprensible para un directivo con poco tiempo.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_strategic_plan_prompt(insights_json: dict, *, client_name: str | None = None) -> str:
+    """
+    Nivel Doctorado (Generalista): Exige un plan de acción riguroso, priorizado y justificado.
+    """
     opportunities = insights_json.get("opportunities", [])
     risks = insights_json.get("risks", [])
     recommendations = insights_json.get("recommendations", [])
@@ -160,312 +171,223 @@ def get_strategic_plan_prompt(insights_json: dict, *, client_name: str | None = 
     risks_text = json.dumps(risks, ensure_ascii=False, indent=2)
     recs_text = "\n- ".join(recommendations) if recommendations else ""
     return f"""
-    **ROL:** Eres un Estratega de Negocio.
-    **TAREA:** Redacta la sección "Plan de Acción Estratégico" conectando oportunidades, riesgos y recomendaciones de forma coherente y priorizada.
-    {('**MARCA:** ' + client_name + ' — Prioriza acciones para esta marca.' ) if client_name else ''}
+    **ROL:** Eres un Director de Estrategia y Operaciones. Tu responsabilidad es convertir los insights en un plan de acción ejecutable, priorizado y con una lógica de negocio impecable.
 
-    **OPORTUNIDADES (base):**
+    **TAREA:** Elaborar la sección "Plan de Acción Estratégico" del informe.
+    {('**MARCA:** ' + client_name + ' — Todas las acciones deben estar orientadas a fortalecer la posición de esta marca.' ) if client_name else ''}
+
+    **INPUTS (Análisis Previo):**
+    - **Oportunidades Identificadas:**
     ```json
     {opp_text}
     ```
-
-    **RIESGOS (base):**
+    - **Riesgos Detectados:**
     ```json
     {risks_text}
     ```
-
-    **RECOMENDACIONES (base):**
+    - **Recomendaciones Preliminares:**
     - {recs_text}
 
-    **INSTRUCCIÓN:**
-    Propón un plan de acción priorizado (corto/medio plazo), asignando recomendaciones a oportunidades específicas y contemplando mitigaciones para los riesgos. Escribe 2-3 párrafos con lenguaje claro y accionable.
-    DEVUELVE SOLO TEXTO CORRIDO en prosa. NO devuelvas JSON, ni listas con guiones, ni encabezados markdown.
-    """
+    **METODOLOGÍA DE PLANIFICACIÓN ESTRATÉGICA:**
+    1.  **Priorización Basada en Impacto:** No todas las acciones son iguales. Prioriza las recomendaciones en función de qué oportunidades capitalizan y qué riesgos de alto impacto mitigan. Utiliza un marco implícito de impacto vs. esfuerzo.
+    2.  **Conexión Lógica:** Cada acción propuesta debe estar explícitamente vinculada a un insight (una oportunidad o un riesgo). Justifica *por qué* cada acción es la respuesta correcta al dato analizado.
+    3.  **Especificidad y Medición:** Transforma las recomendaciones genéricas en iniciativas concretas. Define el "qué" y el "porqué". Evita a toda costa las banalidades.
+        - **PROHIBIDO:** "Mejorar la visibilidad", "Analizar a la competencia", "Aumentar el presupuesto".
+        - **REQUERIDO:** "Lanzar una iniciativa de 'thought leadership' sobre [Tema X] para capturar el 15% del SOV en la categoría [Categoría Y] en los próximos 6 meses, mitigando el riesgo de irrelevancia frente al competidor Z".
+    4.  **Secuenciación:** Organiza las acciones en una secuencia lógica (ej. corto, medio, largo plazo o por áreas funcionales: Marketing, Producto, etc.).
 
+    **FORMATO DE SALIDA:**
+    Un texto en prosa, articulado y profesional. Estructúralo en 2-3 párrafos que presenten el plan de forma coherente. NO devuelvas JSON, listas con guiones o encabezados markdown.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_executive_summary_prompt(aggregated_data: dict) -> str:
     """
-    Prompt robusto para el Resumen Ejecutivo.
-    Usa fallbacks para evitar valores 0 o ausentes y deriva competidores / SOV
-    desde estructuras disponibles cuando falten claves concretas.
+    Nivel Doctorado (Generalista): Eleva el rol a Chief Strategy Officer, demandando una visión de futuro.
     """
     kpis = aggregated_data.get('kpis', {}) or {}
-    client_name = aggregated_data.get('client_name', 'Nuestra marca')
-
-    # Totales básicos
+    client_name = aggregated_data.get('client_name', DEFAULT_CLIENT_NAME)
     total_mentions = int(kpis.get('total_mentions') or 0)
-
-    # Sentimiento promedio: preferir average_sentiment; fallback a sentiment_avg
-    avg_sent = (
-        kpis.get('average_sentiment')
-        if kpis.get('average_sentiment') is not None
-        else kpis.get('sentiment_avg', 0.0)
-    )
-    try:
-        avg_sent = float(avg_sent or 0.0)
-    except Exception:
-        avg_sent = 0.0
-
-    # SOV total: preferir share_of_voice; fallback a sov
-    sov_total = (
-        kpis.get('share_of_voice')
-        if kpis.get('share_of_voice') is not None
-        else kpis.get('sov', 0.0)
-    )
-    try:
-        sov_total = float(sov_total or 0.0)
-    except Exception:
-        sov_total = 0.0
-
-    # Tabla de SOV para derivar competidores cuando no haya lista explícita
-    sov_table = kpis.get('sov_table') or []  # esperado como [(brand, value), ...]
-
-    # Competidores explícitos o derivados desde la tabla, excluyendo la marca cliente
-    competitors = aggregated_data.get('market_competitors') or []
-    if not competitors and isinstance(sov_table, list):
-        try:
-            # Obtener nombre de marca si estuviera en KPIs
-            client_brand = kpis.get('brand_name') or aggregated_data.get('client_name')
-            competitors = [str(b) for b, _ in sov_table if str(b) != str(client_brand)]
-        except Exception:
-            competitors = []
-
-    # SOV por categoría: preferir bloque externo aggregated.sov.current
-    sov_by_cat = {}
-    try:
-        sov_block = aggregated_data.get('sov') or {}
-        current = sov_block.get('current') or {}
-        sov_by_cat = current.get('sov_by_category') or {}
-    except Exception:
-        sov_by_cat = {}
-    if not sov_by_cat:
-        sov_by_cat = kpis.get('sov_by_category') or {}
-
-    # Menciones por competidor: preferir aggregated.sov.current.competitor_mentions; fallback a tabla
-    competitor_mentions = {}
-    try:
-        curr = (aggregated_data.get('sov') or {}).get('current') or {}
-        competitor_mentions = curr.get('competitor_mentions') or {}
-    except Exception:
-        competitor_mentions = {}
-    if not competitor_mentions and isinstance(sov_table, list):
-        try:
-            competitor_mentions = {str(b): float(v) for b, v in sov_table}
-        except Exception:
-            competitor_mentions = {}
-
+    avg_sent = float(kpis.get('average_sentiment') or kpis.get('sentiment_avg') or 0.0)
+    sov_total = float(kpis.get('share_of_voice') or kpis.get('sov') or 0.0)
+    sov_table = kpis.get('sov_table') or []
+    competitors = aggregated_data.get('market_competitors') or [str(b) for b, _ in sov_table if str(b) != client_name]
+    sov_by_cat = (aggregated_data.get('sov', {}).get('current', {}).get('sov_by_category') or kpis.get('sov_by_category') or {})
+    competitor_mentions = (aggregated_data.get('sov', {}).get('current', {}).get('competitor_mentions') or {str(b): float(v) for b, v in sov_table})
     comp_json = json.dumps(competitor_mentions, ensure_ascii=False, indent=2)
     sov_cat_json = json.dumps(sov_by_cat, ensure_ascii=False, indent=2)
 
     return f"""
-    **ROL:** Eres un Chief Insights Officer.
-    **TAREA:** Redacta un RESUMEN EJECUTIVO (2-3 párrafos) claro y accionable.
+    **ROL:** Eres el Chief Strategy Officer (CSO) de la empresa. Tu audiencia es el Consejo de Administración. Esperan de ti una visión aguda, sintética y, sobre todo, orientada al futuro.
 
-    **DATOS CLAVE:**
-    - Marca analizada: {client_name}
-    - Competidores monitoreados: {', '.join(competitors) if competitors else 'N/D'}
-    - Menciones totales (periodo): {total_mentions}
-    - Sentimiento promedio (escala -1 a 1): {avg_sent:.2f}
-    - Share of Voice total (cliente vs. competidores): {sov_total:.2f}%
+    **TAREA:** Redactar el Resumen Ejecutivo Estratégico del trimestre.
 
-    **Desglose de SOV por categoría (cliente/total):**
+    **DATOS CLAVE DEL PERIODO:**
+    - Marca: {client_name}
+    - Competidores Clave: {', '.join(competitors) if competitors else 'N/D'}
+    - Volumen de Conversación: {total_mentions} menciones
+    - Reputación (Sentimiento Promedio): {avg_sent:.2f}
+    - Posición Competitiva (SOV Total): {sov_total:.2f}%
+
+    **Desglose de SOV por Arena Competitiva (Categoría):**
     ```json
     {sov_cat_json}
     ```
 
-    **Menciones de competidores (conteo o % aproximado):**
+    **Pulso de la Competencia (Menciones):**
     ```json
     {comp_json}
     ```
 
-    **INSTRUCCIÓN:**
-    - Sintetiza qué pasó en el periodo, qué temas destacaron y cómo quedó la competencia (usa SOV para evidenciarlo).
-    - Indica implicaciones estratégicas para el negocio (no tácticas de bajo nivel).
-    - Sé concreto, evita jerga, y prioriza claridad.
-    """
+    **DIRECTRICES ESTRATÉGICAS PARA TU ANÁLISIS:**
+    1.  **Diagnóstico (Pasado):** ¿Cuál es la historia principal que cuentan los datos de este periodo? ¿Ganamos o perdimos? ¿En qué campos de batalla (categorías)? Sé directo y concluyente.
+    2.  **Implicación (Presente):** ¿Qué significa este diagnóstico para nuestra posición actual en el mercado? ¿Qué fortalezas debemos consolidar y qué debilidades son críticas?
+    3.  **Prescripción (Futuro):** ¿Cuál es la recomendación estratégica número uno que el Consejo debe considerar? Debe ser una acción audaz que responda directamente al análisis.
 
+    **FORMATO:** Redacta 2-3 párrafos densos en información, con un lenguaje claro y de alto nivel. Evita la jerga de marketing y enfócate en el impacto de negocio.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_competitive_analysis_prompt(aggregated_data: dict) -> str:
-    """Prompt robusto para la sección de competencia.
-
-    Usa siempre datos reales disponibles en el objeto agregado. Si faltan claves
-    en `kpis`, toma fallbacks desde:
-      - `kpis.sov_table` para construir competidores y reparto de share.
-      - `sov.current.sov_by_category` y `sov.current.competitor_mentions`.
-    Así evitamos casos donde sale "0%" o "sin competidores" pese a existir datos.
+    """
+    Nivel Doctorado (Generalista): Centrado en la explotación de vulnerabilidades competitivas.
     """
     kpis = aggregated_data.get('kpis', {}) or {}
-    client_name = aggregated_data.get('client_name', 'Nuestra marca')
-
-    # 1) Competidores y reparto base
-    competitors: list[str] = []
-    # a) si viene una lista explícita
-    if isinstance(aggregated_data.get('market_competitors'), list):
-        competitors = [str(x) for x in aggregated_data.get('market_competitors') if x]
-    # b) derivar de la tabla de SOV si está disponible
+    client_name = aggregated_data.get('client_name', DEFAULT_CLIENT_NAME)
+    sov_total = float(kpis.get('share_of_voice') or kpis.get('sov') or 0.0)
     sov_table = kpis.get('sov_table') or []
-    if not competitors and isinstance(sov_table, list):
-        try:
-            # tabla como [(brand, value_pct), ...]
-            competitors = [str(b) for b, _ in sov_table if isinstance(b, str)]
-        except Exception:
-            pass
-
-    # 2) SOV total del cliente; si no viene share_of_voice usa kpis.sov o 0.0
-    sov_total = (
-        kpis.get('share_of_voice')
-        or kpis.get('sov')
-        or 0.0
-    )
-
-    # 3) SOV por categoría: preferir bloque de `sov.current`
-    sov_by_cat = {}
-    sov_block = aggregated_data.get('sov') or {}
-    try:
-        current = sov_block.get('current') or {}
-        by_cat = current.get('sov_by_category') or {}
-        # convertir a forma compacta cliente/total si viene expandido
-        for cat, entry in (by_cat.items() if isinstance(by_cat, dict) else []):
-            if isinstance(entry, dict):
-                sov_by_cat[str(cat)] = {
-                    'client': int(entry.get('client', 0)),
-                    'total': int(entry.get('total', 0)),
-                }
-    except Exception:
-        pass
-    # fallback a lo que pueda venir en kpis
-    if not sov_by_cat:
-        sov_by_cat = kpis.get('sov_by_category') or {}
-
-    # 4) Menciones por competidor: preferir `sov.current.competitor_mentions`
-    competitor_mentions = {}
-    try:
-        curr = (aggregated_data.get('sov') or {}).get('current') or {}
-        competitor_mentions = curr.get('competitor_mentions') or {}
-    except Exception:
-        competitor_mentions = {}
-
-    # Como último recurso, derivar menciones aproximadas de la tabla de SOV
-    if not competitor_mentions and isinstance(sov_table, list):
-        try:
-            competitor_mentions = {str(b): float(v) for b, v in sov_table}
-        except Exception:
-            competitor_mentions = {}
-
+    competitors = aggregated_data.get('market_competitors') or [str(b) for b, _ in sov_table if str(b) != client_name]
+    sov_by_cat = (aggregated_data.get('sov', {}).get('current', {}).get('sov_by_category') or kpis.get('sov_by_category') or {})
+    competitor_mentions = (aggregated_data.get('sov', {}).get('current', {}).get('competitor_mentions') or {str(b): float(v) for b, v in sov_table})
     comp_json = json.dumps(competitor_mentions, ensure_ascii=False, indent=2)
     sov_cat_json = json.dumps(sov_by_cat, ensure_ascii=False, indent=2)
 
     return (
         f"""
-    **ROL:** Eres un Analista de Competencia.
-    **TAREA:** Redacta la sección "Análisis Competitivo" del informe.
+    **ROL:** Eres un Analista de Inteligencia Competitiva, experto en identificar y explotar las debilidades del adversario.
 
-    **Contexto:** Cliente = {client_name}. Competidores = {', '.join(competitors) if competitors else 'N/D'}.
-    - SOV total del cliente: {float(sov_total):.2f}%
-    - SOV por categoría (cliente/total):
+    **TAREA:** Redactar un informe de "Análisis Competitivo y Estrategias de Ataque" para {client_name}.
+
+    **DOSSIER DE INTELIGENCIA:**
+    - Cliente: {client_name}
+    - Adversarios: {', '.join(competitors) if competitors else 'N/D'}
+    - SOV del Cliente: {sov_total:.2f}%
+    - Mapa de Territorios (SOV por categoría):
     ```json
     {sov_cat_json}
     ```
-    - Menciones por competidor:
+    - Actividad del Adversario (Menciones):
     ```json
     {comp_json}
     ```
 
-    **INSTRUCCIÓN:**
-    - Identifica quién lidera la conversación total y por tema; resalta brechas (>10pp).
-    - Señala categorías donde el cliente está subrepresentado y oportunidades para ganar share.
-    - Concluye con 3 bullets de movimientos competitivos recomendados.
-    """
+    **PROTOCOLO DE ANÁLISIS:**
+    1.  **Identificar al Líder y sus Flancos Débiles:** ¿Quién domina la conversación general? Más importante aún, ¿en qué categoría temática su dominio es más frágil o su sentimiento es negativo a pesar del alto volumen? Ese es su flanco débil.
+    2.  **Detectar "Movimientos de Guerrilla":** ¿Hay algún competidor más pequeño que esté ganando una cuota desproporcionada en una categoría nicho? Analiza su estrategia.
+    3.  **Formular Estrategias de "Flanqueo":** Basado en lo anterior, define 3 movimientos estratégicos recomendados para {client_name}. No te limites a "atacar", piensa en cómo "flanquear": ganar donde el competidor no está mirando o no es fuerte. Cada recomendación debe ser un bullet point claro y accionable.
+
+    **FORMATO:** Un análisis conciso que identifique al líder, sus debilidades y proponga 3 estrategias de flanqueo claras.
+    """ + ANTI_HALLUCINATION_FOOTER
     )
 
 
 def get_deep_dive_analysis_prompt(category_name: str, kpis: dict, client_name: str) -> str:
+    """
+    Nivel Doctorado (Generalista): Exige una inmersión profunda en la psicología del consumidor de la categoría.
+    """
     cat_kpis = kpis.get('sentiment_by_category', {}).get(category_name, {})
-
     sentiment_avg = cat_kpis.get('average', 0.0)
     distribution = cat_kpis.get('distribution', {})
     key_topics = cat_kpis.get('key_topics', {})
-
     dist_text = json.dumps(distribution, indent=2, ensure_ascii=False)
     topics_text = json.dumps(key_topics, indent=2, ensure_ascii=False)
 
     return f"""
-    **ROL:** Eres un Analista de Inteligencia de Mercado experto en el sector de {client_name}.
-    **TAREA:** Escribe el análisis para la sección "{category_name}" de un informe. Tu análisis debe ser una minería de datos, conectando los datos cuantitativos con conclusiones cualitativas y accionables.
+    **ROL:** Eres un Investigador Cualitativo Senior con experiencia en etnografía digital, analizando para {client_name}.
 
-    **DATOS CUANTITATIVOS DE ESTA SECCIÓN:**
-    - Sentimiento Promedio de la Sección: {sentiment_avg:.2f} (comparado con el general de {kpis.get('average_sentiment', 0.0):.2f})
+    **TAREA:** Realizar un "Análisis Psicológico Profundo" de la categoría "{category_name}". Tu objetivo es ir más allá de los datos para entender las motivaciones, frustraciones y necesidades no expresadas del consumidor.
+
+    **DATOS CUANTITATIVOS PARA CONTEXTUALIZAR:**
+    - Sentimiento Promedio (Categoría vs. General): {sentiment_avg:.2f} vs. {kpis.get('average_sentiment', 0.0):.2f}
     - Distribución del Sentimiento:
     {dist_text}
-    - Temas Clave (y su frecuencia):
+    - Temas de Conversación (Frecuencia):
     {topics_text}
 
-    **INSTRUCCIONES:**
-    1.  **Interpreta el Sentimiento:** ¿Es el sentimiento de esta categoría significativamente diferente del promedio general? ¿Qué nos dice la distribución (ej. es polarizado, mayormente neutral, etc.)?
-    2.  **Conecta con los Temas:** ¿Cómo se relacionan los temas más frecuentes con el sentimiento observado? (ej. 'El sentimiento negativo está impulsado principalmente por conversaciones sobre 'precios'').
-    3.  **Extrae un Insight Accionable:** Basado en esta conexión entre datos y temas, ¿cuál es la principal conclusión o recomendación para {client_name}?
+    **GUÍA DE ANÁLISIS PROFUNDO:**
+    1.  **El Significado del Sentimiento:** ¿Qué emoción subyace a la métrica de sentimiento? Si es negativo, ¿es frustración, decepción, enfado? Si es positivo, ¿es satisfacción, entusiasmo, lealtad? La distribución (polarizada, neutral) es una pista clave.
+    2.  **La Tensión en los Temas:** ¿Qué conflicto o tensión revelan los temas clave? Por ejemplo, una alta frecuencia de "precio" y "calidad" sugiere una tensión en torno al valor percibido.
+    3.  **El Insight Oculto y la Oportunidad:** Conecta la emoción (sentimiento) con la tensión (temas) para desvelar una necesidad no satisfecha del consumidor. A partir de este insight, formula una oportunidad de innovación para {client_name} (de producto, comunicación o servicio).
 
-    **FORMATO:** Redacta un párrafo de análisis denso, profesional y directo. No listes los datos, intégralos en tu narrativa.
-    """
-
+    **FORMATO:** Un párrafo de análisis narrativo que revele la psicología del consumidor en esta categoría y concluya con una oportunidad de innovación clara.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_correlation_interpretation_prompt(aggregated_data: dict, correlation_data: dict) -> str:
+    """
+    Nivel Doctorado (Generalista): Enfocado en la validación de hipótesis y la causalidad.
+    """
     data_json = json.dumps(correlation_data, indent=2, ensure_ascii=False)
-    client_name = aggregated_data.get('client_name', 'Nuestra marca')
+    client_name = aggregated_data.get('client_name', DEFAULT_CLIENT_NAME)
     return f"""
-    **ROL:** Eres un Analista Principal de Insights con enfoque causal.
-    **TAREA:** Interpreta las correlaciones transversales entre categorías y KPIs y extrae 3-5 insights potentes y accionables para {client_name}.
+    **ROL:** Eres un Científico de Datos especializado en inferencia causal.
 
-    **DATOS DE CORRELACIÓN (base):**
+    **TAREA:** Interpretar los datos de correlación para {client_name}, distinguir causalidad de casualidad y proponer experimentos para validar tus hipótesis.
+
+    **DATOS DE CORRELACIÓN:**
     ```json
     {data_json}
     ```
 
-    **INSTRUCCIONES:**
-    - Prioriza relaciones con mayor "strength" y soporte cuantitativo.
-    - Formula hipótesis plausibles y cómo validarlas (dato/experimento).
-    - Concreta implicaciones y una recomendación por insight.
-    - Responde en 2-3 párrafos, profesional y claro.
-    """
+    **METODOLOGÍA DE ANÁLISIS CAUSAL:**
+    1.  **Identificar Correlaciones Significativas:** Filtra y enfócate en las 2-3 relaciones con la mayor fuerza ("strength").
+    2.  **Formular Hipótesis Causales:** Para cada correlación, propón una hipótesis de relación causa-efecto. (Ej. "Un aumento en las menciones de la categoría 'Eventos' CAUSA un aumento en el sentimiento general").
+    3.  **Proponer un Plan de Validación:** Para cada hipótesis, diseña un "experimento" o un análisis de datos que podría validarla o refutarla. (Ej. "Para validar la hipótesis, analizar si el sentimiento de los asistentes a eventos específicos es significativamente mayor que el de la media durante las 24h posteriores al evento").
+    4.  **Implicación de Negocio:** Si la hipótesis causal fuera cierta, ¿cuál sería la implicación estratégica para {client_name}?
+
+    **FORMATO:** Redacta 2-3 párrafos. Cada párrafo debe presentar una correlación, la hipótesis causal, el plan de validación y la implicación estratégica.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 
 def get_trends_anomalies_prompt(aggregated_data: dict) -> str:
+    """
+    Nivel Doctorado (Generalista): Análisis de tendencias con enfoque en la velocidad del cambio (momentum).
+    """
     trends = aggregated_data.get('trends', {})
     prev = aggregated_data.get('previous_period', {})
     trends_json = json.dumps(trends, indent=2, ensure_ascii=False)
     return f"""
-    **ROL:** Eres un Analista de Tendencias.
-    **TAREA:** Redacta la sección "Tendencias y Señales Emergentes" del informe, explicando cambios significativos entre periodos.
+    **ROL:** Eres un Analista de Tendencias y Futuros (Futures Analyst).
 
-    **PERIODO ANTERIOR:** {prev.get('start_date', 'N/D')} a {prev.get('end_date', 'N/D')}
-    **CAMBIOS (trends JSON):**
+    **TAREA:** Redactar la sección "Tendencias, Anomalías y Momentum del Mercado".
+
+    **DATOS DE CAMBIO (Periodo Actual vs. {prev.get('start_date', 'N/D')} - {prev.get('end_date', 'N/D')}):**
     ```json
     {trends_json}
     ```
 
-    **INSTRUCCIONES:**
-    - Explica las variaciones de sentimiento (total y por categoría) y SOV por categoría.
-    - Destaca competidores que ganaron/perdieron share y por qué podría estar pasando.
-    - Enumera 3-5 tópicos emergentes y valora si son moda o tendencia (con criterios).
-    - Cierra con 3 recomendaciones tácticas inmediatas y 2 estratégicas.
-    """
+    **FRAMEWORK DE ANÁLISIS DE TENDENCIAS:**
+    1.  **Magnitud y Velocidad:** No solo identifiques qué ha cambiado, sino la magnitud y la velocidad del cambio. ¿Es un cambio lento y gradual o una disrupción repentina?
+    2.  **Análisis de 'Drivers':** ¿Qué fuerzas están impulsando estas tendencias? ¿Son movimientos de la competencia, cambios en el comportamiento del consumidor, factores macroeconómicos?
+    3.  **De Señal Débil a Tendencia Fuerte:** Para los tópicos emergentes, evalúa su potencial. ¿Es una "señal débil" (novedad pasajera) o tiene el potencial de convertirse en una "tendencia fuerte" (cambio estructural)? Justifica tu evaluación.
+    4.  **Implicaciones Estratégicas y Tácticas:** Concluye con 2 recomendaciones estratégicas (a 12-18 meses) y 3 tácticas inmediatas (a 30-60 días) basadas en tu análisis.
 
+    **FORMATO:** Un análisis ejecutivo que siga el framework descrito.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_agent_insights_summary_prompt(data: dict) -> str:
     """
-    Genera un prompt para resumir el análisis de insights de agentes.
-    Espera una clave 'agent_insights' con buckets normalizados.
+    Nivel Doctorado (Generalista): Meta-análisis sobre la calidad de los insights generados.
     """
-    import json
     agent_json = json.dumps(data.get("agent_insights", {}), ensure_ascii=False, indent=2)
     return f"""
     **Rol y Objetivo:**
-    Actúa como Analista Jefe de Estrategias de Agentes. Tu misión es analizar el seguimiento de insights del Answer Engine y presentar los hallazgos clave.
+    Actúa como un Auditor de Sistemas de Inteligencia Artificial. Tu misión es realizar un meta-análisis de los insights generados por el "Answer Engine" para evaluar su rendimiento, identificar sesgos y proponer mejoras.
 
-    **Estructura Requerida:**
-    1.  **Rendimiento de Agentes (3 bullets):** Tres puntos que resuman el desempeño general de los agentes (calidad de oportunidades/risks/tendencias, señales repetidas, y cobertura de temas).
-    2.  **Insights Destacados:** Un párrafo corto que describa los insights más relevantes identificados (oportunidades y riesgos más fuertes) con referencia a su impacto.
-    3.  **Recomendaciones:** Dos recomendaciones basadas en el análisis para próximas decisiones.
+    **Estructura Requerida del Informe de Auditoría:**
+    1.  **Diagnóstico del Rendimiento del Agente (3 bullets):**
+        -   **Calidad y Especificidad:** Evalúa si los insights (oportunidades, riesgos) son específicos y accionables o genéricos y banales.
+        -   **Cobertura y Puntos Ciegos:** Analiza si los insights cubren de manera equilibrada todos los temas estratégicos o si hay "puntos ciegos" (áreas importantes sin insights).
+        -   **Novedad vs. Redundancia:** Determina el ratio de insights novedosos frente a señales repetidas o redundantes.
+    2.  **Síntesis de Insights de Mayor Valor:** Destaca el insight (oportunidad o riesgo) más valioso detectado por el agente y explica por qué es estratégicamente relevante.
+    3.  **Recomendaciones para la Optimización del Agente:** Propón dos recomendaciones para mejorar la calidad de los insights en el futuro (ej. "Refinar los prompts de 'riesgos' para que se enfoquen en amenazas competitivas y no solo en quejas de clientes").
 
     **Datos para el Análisis (JSON):**
     ```json
@@ -473,81 +395,84 @@ def get_agent_insights_summary_prompt(data: dict) -> str:
     ```
 
     **Instrucción Final:**
-    Genera el resumen siguiendo estrictamente la estructura y el tono descritos. Sé claro y ejecutivo.
-    """
-
+    Genera el informe de auditoría siguiendo estrictamente la estructura y el tono crítico y constructivo descritos.
+    """ + ANTI_HALLUCINATION_FOOTER
 
 def get_deep_dive_mentions_prompt(topic: str, mentions: list[str]) -> str:
     """
-    Prompt para analizar en profundidad menciones textuales sobre un tema.
-    Devuelve JSON estricto con: sintesis_del_hallazgo, causa_raiz y citas_destacadas.
+    Nivel Doctorado (Generalista): Análisis cualitativo para descubrir 'jobs to be done'.
     """
-    import json
     corpus = "\n\n".join([m.strip()[:4000] for m in mentions if isinstance(m, str)])
     return (
-        "Actúa como Analista Cualitativo Senior. Analiza las menciones textuales del tema especificado "
-        "y devuelve EXCLUSIVAMENTE un JSON con las claves pedidas. Sé sintético y profesional. "
-        f"\n\nTema: {topic}\n"
-        "Menciones (texto literal, truncado si es largo):\n"
+        "**ROL:** Actúa como un Investigador de Diseño (Design Researcher) aplicando el framework 'Jobs to be Done'. Tu objetivo no es entender lo que los clientes dicen, sino lo que intentan *lograr*.\n\n"
+        f"**TEMA A INVESTIGAR:** {topic}\n\n"
+        "**CORPUS DE MENCIONES (Datos de Campo):**\n"
         f"{corpus}\n\n"
-        "Formato de salida (JSON estricto):\n"
+        "**METODOLOGÍA DE ANÁLISIS 'JOBS TO BE DONE':**\n"
+        "1.  **Síntesis del Hallazgo:** ¿Cuál es el 'trabajo' (job) funcional, social o emocional que los clientes intentan hacer cuando hablan de este tema? Resume el progreso que buscan en sus vidas.\n"
+        "2.  **Causa Raíz ('Forces of Progress'):** ¿Qué 'fuerzas' los impulsan a buscar una nueva solución (frustraciones, problemas con la solución actual) y qué 'fuerzas' los frenan (ansiedades, hábitos)?\n"
+        "3.  **Citas Destacadas (Evidencia):** Extrae 3 citas que no solo sean representativas, sino que revelen claramente el 'trabajo a realizar' o las 'fuerzas' en juego.\n\n"
+        "**FORMATO DE SALIDA (JSON ESTRICTO):**\n"
         "{\n"
-        "  \"sintesis_del_hallazgo\": \"3-5 frases con el hallazgo principal y su impacto para negocio.\",\n"
-        "  \"causa_raiz\": \"Hipótesis clara de la causa raíz basada en patrones en las menciones.\",\n"
-        "  \"citas_destacadas\": [\"cita 1\", \"cita 2\", \"cita 3\"]\n"
+        '  "sintesis_del_hallazgo": "Descripción del Job to be Done principal que emerge de las menciones.",\n'
+        '  "causa_raiz": "Análisis de las fuerzas de empuje y freno que experimenta el cliente.",\n'
+        '  "citas_destacadas": ["Cita que revela el progreso deseado", "Cita que muestra una frustración", "Cita que expone una ansiedad"]\n'
         "}"
-    )
-
+    ) + ANTI_HALLUCINATION_FOOTER
 
 def get_cluster_analyst_prompt(cluster: dict) -> str:
-    """Prompt para Analista de Clusters (Nivel 1). Devuelve JSON con topic_name y key_points."""
-    import json
-    examples = [
-        {
-            "id": m.get("id"),
-            "summary": (m.get("summary") or "")[:300],
-            "sentiment": m.get("sentiment"),
-        }
-        for m in cluster.get("example_mentions", [])
-    ]
-    payload = {
-        "examples": examples,
-        "volume": cluster.get("count", 0),
-        "avg_sentiment": cluster.get("avg_sentiment", 0.0),
-        "top_sources": cluster.get("top_sources", []),
-    }
+    """
+    Nivel Doctorado (Generalista): Demanda un nombramiento y resumen que capture la esencia del cluster.
+    """
+    examples = [{"id": m.get("id"), "summary": (m.get("summary") or "")[:300], "sentiment": m.get("sentiment")} for m in cluster.get("example_mentions", [])]
+    payload = {"examples": examples, "volume": cluster.get("count", 0), "avg_sentiment": cluster.get("avg_sentiment", 0.0), "top_sources": cluster.get("top_sources", [])}
     data_json = json.dumps(payload, ensure_ascii=False)
     return f"""
-Eres un analista especializado en nombrar y resumir temas de conversación.
-Con base en los EJEMPLOS representativos del cluster y sus métricas, devuelve SOLO este JSON:
-{{"topic_name": "...", "key_points": ["...", "..."]}}
+    **ROL:** Eres un Analista Cualitativo experto en síntesis y conceptualización.
 
-Datos de entrada (JSON):
-{data_json}
-"""
+    **TAREA:** Analiza los siguientes datos de un cluster de conversación y destila su esencia.
+
+    **DATOS DEL CLUSTER:**
+    ```json
+    {data_json}
+    ```
+
+    **INSTRUCCIONES:**
+    1.  **Nombra el Tema:** Crea un `topic_name` que sea corto, evocador y que capture la idea central o la tensión del cluster. Evita nombres genéricos.
+    2.  **Sintetiza los Puntos Clave:** Extrae 2-3 `key_points` que no sean un resumen de los ejemplos, sino que representen las ideas, emociones o preguntas fundamentales que definen este cluster de conversación.
+
+    **FORMATO DE SALIDA (JSON ESTRICTO):**
+    {{"topic_name": "Nombre evocador del tema", "key_points": ["Insight principal 1", "Insight principal 2"]}}
+    """ + ANTI_HALLUCINATION_FOOTER
 
 
 def get_clusters_synthesizer_prompt(clusters: list[dict]) -> str:
-    """Prompt para Sintetizador Estratégico (Nivel 2) sobre múltiples clusters."""
-    import json
-    brief = [
-        {
-            "topic_name": c.get("topic_name", "(sin nombre)"),
-            "volume": c.get("volume", 0),
-            "sentiment": c.get("sentiment", 0.0),
-        }
-        for c in clusters
-    ]
+    """
+    Nivel Doctorado (Generalista): Demanda la creación de una tesis estratégica a partir de los clusters.
+    """
+    brief = [{"topic_name": c.get("topic_name", "(sin nombre)"), "volume": c.get("volume", 0), "sentiment": c.get("sentiment", 0.0)} for c in clusters]
     data_json = json.dumps(brief, ensure_ascii=False)
     return f"""
-Eres un estratega de mercado senior. Con el resumen de los principales temas (clusters), devuelve SOLO este JSON:
-{{
-  "meta_narrativas": ["...", "..."],
-  "oportunidad_principal": "...",
-  "riesgo_inminente": "...",
-  "plan_estrategico": ["acción 1", "acción 2"]
-}}
+    **ROL:** Eres un Estratega de Marca y Mercado.
 
-Datos de entrada (JSON):
-{data_json}
-"""
+    **TAREA:** Sintetiza el siguiente resumen de temas de conversación (clusters) en una tesis estratégica coherente.
+
+    **DATOS DE ENTRADA (Resumen de Clusters):**
+    ```json
+    {data_json}
+    ```
+
+    **MARCO DE SÍNTESIS ESTRATÉGICA:**
+    1.  **Meta-Narrativas:** Identifica 2-3 narrativas o temas transversales que conecten varios de los clusters individuales. ¿Cuál es la historia más grande que se está contando a través de estos temas?
+    2.  **Oportunidad Principal:** ¿Cuál es la mayor oportunidad de mercado sin explotar que revelan estos clusters en su conjunto?
+    3.  **Riesgo Inminente:** ¿Cuál es la amenaza más significativa o el riesgo más urgente que se desprende del análisis agregado?
+    4.  **Plan Estratégico:** Propón 2-3 iniciativas estratégicas de alto nivel que respondan directamente a las meta-narrativas, capitalicen la oportunidad principal y mitiguen el riesgo inminente.
+
+    **FORMATO DE SALIDA (JSON ESTRICTO):**
+    {{
+      "meta_narrativas": ["Narrativa transversal 1", "Narrativa transversal 2"],
+      "oportunidad_principal": "Descripción de la oportunidad de mercado sin explotar.",
+      "riesgo_inminente": "Descripción de la amenaza o riesgo más significativo.",
+      "plan_estrategico": ["Iniciativa estratégica 1", "Iniciativa estratégica 2"]
+    }}
+    """ + ANTI_HALLUCINATION_FOOTER

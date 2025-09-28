@@ -2,6 +2,16 @@ from typing import Any
 import json
 from . import prompts as catalog
 
+# Bloque común para rigor y anti-alucinación en prompts
+ANTI_HALLUCINATION_FOOTER = (
+    "\n\n**REGLAS DE RIGOR (Obligatorias):**\n"
+    "- Usa exclusivamente los datos proporcionados. No inventes cifras ni entidades.\n"
+    "- Si falta un dato, escribe 'Dato no disponible'.\n"
+    "- Cita la fuente del dato entre paréntesis (ej. 'KPIs', 'SOV por categoría').\n"
+    "- Declara supuestos y posibles confusores; marca confianza de hipótesis: Alta|Media|Baja.\n"
+)
+DEFAULT_BRAND = "La Marca"
+
 
 def get_executive_summary_prompt(data: dict[str, Any]):
     """
@@ -14,7 +24,7 @@ def get_executive_summary_prompt(data: dict[str, Any]):
             (data or {}).get("brand")
             or (data or {}).get("client_name")
             or (data.get("kpis", {}) if isinstance(data, dict) else {}).get("brand_name")
-            or "La Marca"
+            or DEFAULT_BRAND
         )
 
         # Construir una representación segura del contenido para el análisis
@@ -59,7 +69,7 @@ def get_executive_summary_prompt(data: dict[str, Any]):
 
     **Instrucción Final:**
     Genera el resumen ejecutivo siguiendo estrictamente la estructura y el tono descritos. Sé implacable en tu análisis y no tengas miedo de señalar tanto las oportunidades como las amenazas críticas.
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
     except Exception:
         # Fallback muy defensivo
         safe = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
@@ -86,7 +96,7 @@ def get_deep_dive_analysis_prompt(data: dict[str, Any]):
         "sentiment_comparison": "Lectura con apoyo en datos y, si procede, breve cita"
       }}
     }}
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
 
 
 def get_recommendations_prompt(data: dict[str, Any]):
@@ -119,7 +129,7 @@ def get_recommendations_prompt(data: dict[str, Any]):
         ]
       }}
     }}
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
 
 
 def get_methodology_prompt():
@@ -134,7 +144,7 @@ def get_methodology_prompt():
             "text": "El presente informe se basa en un análisis cuantitativo y cualitativo..."
         }}
     }}
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
 
 
 def get_correlation_anomalies_prompt(data: dict[str, Any]):
@@ -166,7 +176,7 @@ def get_correlation_anomalies_prompt(data: dict[str, Any]):
 
     **Instrucción Final:**
     No te limites a describir los datos. Tu valor reside en ir más allá de lo evidente y proponer una idea original basada en las conexiones que descubras.
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
     except Exception:
         return "Analiza posibles correlaciones entre temas y sentimiento; devuelve una hipótesis y una acción." 
 
@@ -175,7 +185,7 @@ def get_competitive_analysis_prompt(data: dict[str, Any]):
     """
     Genera un prompt para el análisis del panorama competitivo con valores por defecto seguros.
     """
-    brand = (data or {}).get("brand") or (data or {}).get("client_name") or "La Marca"
+    brand = (data or {}).get("brand") or (data or {}).get("client_name") or DEFAULT_BRAND
     leader_brand = (data or {}).get("sov_leader_name") or (data or {}).get("leader_brand") or "Líder"
     sov_summary = json.dumps((data or {}).get("sov_summary") or (data or {}).get("kpis") or {}, ensure_ascii=False)
     granular_sov = json.dumps((data or {}).get("sov_by_topic") or (data or {}).get("kpis", {}).get("sov_by_category") or {}, ensure_ascii=False)
@@ -198,5 +208,5 @@ def get_competitive_analysis_prompt(data: dict[str, Any]):
 
     **Instrucción Final:**
     Tu análisis debe concluir con una recomendación clara sobre dónde enfocar los esfuerzos para ganar cuota de conversación al líder.
-    """
+    """ + ANTI_HALLUCINATION_FOOTER
 

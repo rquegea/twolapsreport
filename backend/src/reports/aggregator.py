@@ -19,6 +19,16 @@ from src.engines.openai_engine import fetch_response
 
 # Mapeo de sinónimos de marcas (alineado con backend/app.py)
 BRAND_SYNONYMS: Dict[str, List[str]] = {
+    # Nombre canónico solicitado por el cliente
+    "The Core Escuela Superior de Audiovisuales": [
+        "the core",
+        "the core school",
+        "thecore",
+        "the core escuela superior de audiovisuales",
+        "entertainment science school",
+        "entertainment science",
+    ],
+    # Mantener entradas existentes
     "The Core School": ["the core", "the core school", "thecore"],
     "U-TAD": ["u-tad", "utad"],
     "ECAM": ["ecam"],
@@ -744,6 +754,35 @@ def get_visibility_series(
             values.append(round(pct, 1))
             day += _td(days=1)
         return dates, values
+    finally:
+        if own_session:
+            session.close()
+
+
+def get_mentions_volume_series(session: Optional[Session], project_id: int, *, start_date: Optional[str] = None, end_date: Optional[str] = None) -> list[tuple[str, int]]:
+    """
+    Serie diaria del número total de menciones registradas en el mercado/proyecto.
+    Devuelve lista de (fecha, conteo) ordenada ascendentemente por fecha.
+    """
+    own_session = False
+    if session is None:
+        session = get_session()
+        own_session = True
+    try:
+        sql = text(
+            """
+            SELECT DATE_TRUNC('day', m.created_at)::date AS d, COUNT(*) AS c
+            FROM mentions m
+            JOIN queries q ON q.id = m.query_id
+            WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+              AND m.created_at >= CAST(COALESCE(:start_date, '1970-01-01') AS date)
+              AND m.created_at < (CAST(COALESCE(:end_date, '2999-12-31') AS date) + INTERVAL '1 day')
+            GROUP BY 1
+            ORDER BY 1
+            """
+        )
+        rows = session.execute(sql, {"pid": int(project_id), "start_date": start_date, "end_date": end_date}).all()
+        return [(r[0].strftime("%Y-%m-%d"), int(r[1] or 0)) for r in rows]
     finally:
         if own_session:
             session.close()
