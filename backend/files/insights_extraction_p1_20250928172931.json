@@ -1,0 +1,61 @@
+{
+  "executive_summary": "The Core School's share of voice is currently at 14%, ranking third among competitors, with a stable average sentiment of 0.60. To improve market position, strategic focus on increasing visibility and addressing parental concerns about employability is recommended.",
+  "key_findings": [
+    "The Core School ranks third in share of voice among competitors, indicating room for growth in market presence.",
+    "Parental concerns about employability in the audiovisual sector present a risk to student enrollment.",
+    "The sentiment is generally positive, but there is a need to address specific negative perceptions related to job stability."
+  ],
+  "opportunities": [
+    {
+      "opportunity": "Increase visibility through targeted marketing campaigns.",
+      "impact": "Alto",
+      "probability": "Alta",
+      "effort": "Medio",
+      "confidence": "Alta",
+      "evidence_ids": [
+        "1323",
+        "845",
+        "1101"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Parental concerns about employability and job stability in the audiovisual sector.",
+      "mitigation": "Develop and communicate successful alumni case studies to demonstrate career success.",
+      "impact": "Medio",
+      "probability": "Alta",
+      "evidence_ids": [
+        "1154",
+        "579",
+        "643"
+      ]
+    }
+  ],
+  "recommendations": [
+    "Launch a marketing campaign focused on The Core School's industry connections and alumni success stories.",
+    "Conduct workshops or webinars addressing employability and career paths in the audiovisual sector."
+  ],
+  "time_series_analysis": {
+    "global": {
+      "trend_description": "The sentiment trend is stable with low volatility, averaging around 0.60 over the observed period. Visibility shows significant fluctuations with peaks on 2025-09-11 and 2025-09-25.",
+      "anomalies": [
+        {
+          "date": "2025-09-11",
+          "metric": "visibility",
+          "magnitude": "+40.6",
+          "causal_hypothesis": "Increased mentions due to a specific event or campaign.",
+          "confidence": "Media"
+        },
+        {
+          "date": "2025-09-25",
+          "metric": "visibility",
+          "magnitude": "+59.4",
+          "causal_hypothesis": "Potential media coverage or promotional activity.",
+          "confidence": "Media"
+        }
+      ],
+      "sentiment_vs_volume_correlation": "There is a weak correlation between sentiment and volume, indicating that changes in visibility do not significantly affect sentiment."
+    }
+  }
+}

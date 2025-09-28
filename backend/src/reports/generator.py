@@ -291,16 +291,6 @@ def _generate_full_part2_texts(insights_json: Dict[str, Any], aggregated: Dict[s
     except Exception:
         out["executive_summary"] = _normalize_section(insights_json.get("executive_summary", ""), "executive_summary")
 
-    # Resumen Ejecutivo y Hallazgos (usar strategic_summary sobre JSON)
-    try:
-        sum_prompt = s_prompts.get_strategic_summary_prompt({
-            "executive_summary": insights_json.get("executive_summary", ""),
-            "key_findings": insights_json.get("key_findings", []),
-        }, client_name=brand_name)
-        out["summary_and_findings"] = _normalize_section(fetch_response(sum_prompt, model="gpt-4o", temperature=0.3, max_tokens=900), "summary_and_findings")
-    except Exception:
-        out["summary_and_findings"] = ""
-
     # Análisis Competitivo (usa KPIs agregados ya presentes en aggregated)
     try:
         comp_prompt = s_prompts.get_competitive_analysis_prompt(aggregated)
@@ -315,14 +305,64 @@ def _generate_full_part2_texts(insights_json: Dict[str, Any], aggregated: Dict[s
     except Exception:
         out["trends"] = ""
 
-    # Correlaciones Transversales (si hubiera un bloque en insights_json)
+    # Correlaciones Transversales (usar datos del agregador para contexto adicional)
     try:
-        corr = insights_json.get("time_series_analysis", {})
-        if corr:
-            corr_prompt = s_prompts.get_correlation_interpretation_prompt(aggregated, corr)
-            out["correlations"] = _normalize_section(fetch_response(corr_prompt, model="gpt-4o-mini", temperature=0.3, max_tokens=900), "correlations")
-        else:
-            out["correlations"] = ""
+        base_corr = insights_json.get("time_series_analysis", {}) or {}
+        corr_input = {
+            **base_corr,
+            "basic": aggregated.get("correlations", {}),
+            "sov_by_category": ((aggregated.get("sov") or {}).get("current") or {}).get("sov_by_category", {}),
+            "sentiment_by_category": aggregated.get("sentiment_by_category", {}),
+            "time_series": aggregated.get("time_series", {}),
+            "visibility_timeseries": aggregated.get("visibility_timeseries", []),
+        }
+        corr_prompt = s_prompts.get_correlation_interpretation_prompt(aggregated, corr_input)
+        out["correlations"] = _normalize_section(fetch_response(corr_prompt, model="gpt-4o-mini", temperature=0.3, max_tokens=1100), "correlations")
+        # Fallback textual si el LLM devuelve vacío: usar métricas calculadas
+        if not out["correlations"]:
+            try:
+                corr = aggregated.get("correlations", {}) or {}
+                lines: list[str] = []
+                def _fmt_r(d: dict | None, label: str) -> None:
+                    if isinstance(d, dict):
+                        r = d.get("pearson_r", None)
+                        n = d.get("n", None)
+                        if r is not None or n:
+                            lines.append(f"- {label}: r={(float(r)):.2f} | n={int(n or 0)}" if r is not None else f"- {label}: r=N/D | n={int(n or 0)}")
+                _fmt_r(corr.get("sentiment_vs_mentions"), "Sentimiento vs Menciones")
+                _fmt_r(corr.get("visibility_vs_mentions"), "Visibilidad vs Menciones")
+                _fmt_r(corr.get("visibility_vs_sentiment"), "Visibilidad vs Sentimiento")
+                # Mejor lag volumen→sentimiento
+                best = ((corr.get("lags_volume_to_sentiment") or {}).get("best") or {}) if isinstance(corr.get("lags_volume_to_sentiment"), dict) else {}
+                if best:
+                    lag = best.get("lag")
+                    r_best = best.get("r")
+                    if lag is not None or r_best is not None:
+                        try:
+                            lines.append(f"- Mejor lag volumen→sentimiento: {int(lag)} días | r={(float(r_best)):.2f}")
+                        except Exception:
+                            lines.append(f"- Mejor lag volumen→sentimiento: {int(lag) if lag is not None else 'N/D'} días | r=N/D")
+                # Top oportunidades/risks por categoría
+                quads = corr.get("category_quadrants") or {}
+                if isinstance(quads, dict):
+                    def _pick(key: str, title: str) -> None:
+                        items = quads.get(key) or []
+                        if isinstance(items, list) and items:
+                            lines.append(title + ":")
+                            for it in items[:3]:
+                                try:
+                                    cat = str(it.get("category"))
+                                    sovp = float(it.get("sov_pct", 0.0))
+                                    sen = float(it.get("sentiment", 0.0))
+                                    lines.append(f"  • {cat} — SOV {sovp:.1f}% | Sent {sen:.2f}")
+                                except Exception:
+                                    continue
+                    _pick("top_opportunities", "Top oportunidades por categoría")
+                    _pick("top_risks", "Top riesgos por categoría")
+                if lines:
+                    out["correlations"] = "Correlaciones Transversales entre Categorías (resumen basado en datos):\n" + "\n".join(lines)
+            except Exception:
+                pass
     except Exception:
         out["correlations"] = ""
 
@@ -332,10 +372,33 @@ def _generate_full_part2_texts(insights_json: Dict[str, Any], aggregated: Dict[s
             "opportunities": insights_json.get("opportunities", []),
             "risks": insights_json.get("risks", []),
             "recommendations": insights_json.get("recommendations", []),
-        }, client_name=brand_name)
+        }, client_name=(aggregated.get("client_name") or "Cliente"))
         out["action_plan"] = _normalize_section(fetch_response(plan_prompt, model="gpt-4o", temperature=0.3, max_tokens=1100), "action_plan")
     except Exception:
         out["action_plan"] = ""
+
+    # Resumen Ejecutivo y Hallazgos — ahora con TODO el contexto disponible (incluye SOV por categoría si existe)
+    try:
+        sov_by_category = ((aggregated.get("sov") or {}).get("current") or {}).get("sov_by_category", {})
+        sum_prompt = s_prompts.get_strategic_summary_prompt({
+            "executive_summary": insights_json.get("executive_summary", ""),
+            "key_findings": insights_json.get("key_findings", []),
+            # Contexto ampliado para cubrir todos los apartados del PDF
+            "context": {
+                "competitive_analysis": out.get("competitive_analysis", ""),
+                "trends": out.get("trends", ""),
+                "correlations": out.get("correlations", ""),
+                "action_plan": out.get("action_plan", ""),
+                "sov_by_category": sov_by_category,
+                "kpis": aggregated.get("kpis", {}),
+            },
+        }, client_name=(aggregated.get("client_name") or "Cliente"))
+        out["summary_and_findings"] = _normalize_section(
+            fetch_response(sum_prompt, model="gpt-4o", temperature=0.3, max_tokens=900),
+            "summary_and_findings",
+        )
+    except Exception:
+        out["summary_and_findings"] = out.get("executive_summary", "")
 
     return out
 
@@ -672,6 +735,19 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         },
     }
 
+    # Inyectar SOV por categoría y tendencias ANTES de generar textos para que el resumen no advierta carencia
+    try:
+        sov_trends_extra = aggregator.get_share_of_voice_and_trends(
+            None,
+            project_id,
+            start_date=start_date or "1970-01-01",
+            end_date=end_date or "2999-12-31",
+            client_brand=brand_name,
+        )
+        aggregated["sov"] = sov_trends_extra
+    except Exception:
+        aggregated["sov"] = {}
+
     # Nivel 1: análisis por cluster
     cluster_summaries: List[Dict[str, Any]] = []
     for c in (clusters or [])[:12]:  # límite defensivo para rendimiento
@@ -785,6 +861,44 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         "mentions_volume": mentions_vol_img,
     }
 
+    # SOV por categoría (cliente) y delta vs periodo previo — reutiliza bundle ya calculado
+    try:
+        sov_curr = (aggregated.get("sov", {}).get("current", {}) if isinstance(aggregated.get("sov"), dict) else {}) or {}
+        cat_map = sov_curr.get("sov_by_category", {}) or {}
+        images["sov_by_category"] = plotter.plot_sov_by_category(cat_map)
+    except Exception:
+        images["sov_by_category"] = None
+    try:
+        delta_map = ((aggregated.get("sov", {}).get("trends", {}) if isinstance(aggregated.get("sov"), dict) else {}) or {}).get("sov_delta_by_category")
+        images["sov_by_category_delta"] = plotter.plot_sov_delta_by_category(delta_map) if isinstance(delta_map, dict) and delta_map else None
+    except Exception:
+        images["sov_by_category_delta"] = None
+
+    # Imágenes adicionales para correlaciones transversales
+    try:
+        corr_bundle = aggregated.get("correlations", {}) or {}
+        from . import plotter as _pl
+        # Dispersión SOV vs Sentimiento por categoría
+        quad = corr_bundle.get("category_quadrants", {}) if isinstance(corr_bundle, dict) else {}
+        rows = quad.get("rows") or []
+        images["sov_sent_scatter"] = _pl.plot_category_sov_vs_sentiment_scatter(rows, quad.get("thresholds", {}))
+    except Exception:
+        images["sov_sent_scatter"] = None
+    try:
+        corr_mat = (aggregated.get("correlations", {}) or {}).get("matrix", {})
+        labels = corr_mat.get("labels", []) if isinstance(corr_mat, dict) else []
+        values = corr_mat.get("values", []) if isinstance(corr_mat, dict) else []
+        from . import plotter as _pl
+        images["corr_heatmap"] = _pl.plot_correlation_heatmap(labels, values)
+    except Exception:
+        images["corr_heatmap"] = None
+    try:
+        lags = ((aggregated.get("correlations", {}) or {}).get("lags_volume_to_sentiment", {}) or {}).get("series", [])
+        from . import plotter as _pl
+        images["lag_corr"] = _pl.plot_lag_correlation(lags)
+    except Exception:
+        images["lag_corr"] = None
+
     # Nueva: Wordcloud cualitativa reciente (corpus global)
     try:
         corpus = aggregator.get_all_mentions_for_period(limit=120, project_id=project_id, client_brand=brand_name, start_date=start_date, end_date=end_date)
@@ -813,6 +927,63 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
     except Exception:
         structured_recs = []
 
+    # Filtrar campañas de marketing/ads y reforzar con 1-2 acciones operativas si faltan
+    try:
+        banned = ["campaña", "campana", "marketing", "ads", "sem", "publicidad", "anuncio", "paid", "ppc"]
+        def _is_banned(action_text: str | None) -> bool:
+            s = (action_text or "").lower()
+            return any(k in s for k in banned)
+        filtered: list[dict[str, Any]] = []
+        for it in structured_recs:
+            act = it.get("action") or it.get("recommendation")
+            if _is_banned(str(act)):
+                continue
+            filtered.append(it)
+        structured_recs = filtered
+        # Añadir acciones operativas si hay menos de 2
+        def _append_if_missing(item: dict[str, Any]) -> None:
+            existing = [str(x.get("action") or "").strip().lower() for x in structured_recs]
+            key = str(item.get("action") or "").strip().lower()
+            if key and key not in existing:
+                structured_recs.append(item)
+        if len(structured_recs) < 3:
+            # Programa de Salidas Profesionales — accciones por fases (no marketing)
+            fase1 = {
+                "action": "Fase 1 (0-30 días): Diseñar y publicar el 'Programa de Salidas Profesionales' (landing, calendario, responsables, FAQs)",
+                "metric": "Landing publicada y ≥4 talleres programados",
+                "owner": "Empleabilidad",
+                "due": "30 días",
+                "impact": "Alto",
+                "effort": "Medio",
+                "probability": "Alta",
+                "confidence": "Media",
+            }
+            fase2 = {
+                "action": "Fase 2 (30-60 días): Ejecutar 4 talleres/mes (CV, portfolio, entrevistas, LinkedIn) y lanzar mentoría alumni",
+                "metric": "Nº talleres/mes y Nº alumnos en mentoría",
+                "owner": "Empleabilidad",
+                "due": "60 días",
+                "impact": "Alto",
+                "effort": "Medio",
+                "probability": "Alta",
+                "confidence": "Media",
+            }
+            fase3 = {
+                "action": "Fase 3 (60-90 días): Firmar ≥5 convenios de prácticas remuneradas y activar bolsa de empleo (≥10 ofertas/mes)",
+                "metric": "Nº convenios firmados y ofertas/mes",
+                "owner": "Relaciones Institucionales",
+                "due": "90 días",
+                "impact": "Alto",
+                "effort": "Medio",
+                "probability": "Alta",
+                "confidence": "Media",
+            }
+            _append_if_missing(fase1)
+            _append_if_missing(fase2)
+            _append_if_missing(fase3)
+    except Exception:
+        pass
+
     content_for_pdf: Dict[str, Any] = {
         "strategic": strategic_sections,
         "kpi_rows": _build_kpi_rows(aggregated["kpis"]),
@@ -835,6 +1006,138 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             "topics_text": "",
         },
     }
+
+    # --- NUEVO: Fichas por competidor (deep dive real) ---
+    competitor_profiles: list[dict[str, Any]] = []
+    try:
+        # Limitar a 6 para control de longitud
+        for comp in (competitors_list or [])[:6]:
+            try:
+                # KPIs básicos del competidor
+                comp_kpis = aggregator.get_kpi_summary(None, project_id, start_date=start_date, end_date=end_date, client_brand=comp)
+            except Exception:
+                comp_kpis = {"total_mentions": 0, "sentiment_avg": 0.0, "sov": 0.0, "brand_name": comp}
+
+            # SOV por categoría del competidor y menciones por categoría
+            try:
+                sov_comp = aggregator.get_share_of_voice_and_trends(None, project_id, start_date=start_date or "1970-01-01", end_date=end_date or "2999-12-31", client_brand=comp)
+                sov_by_cat_comp = (sov_comp.get("current", {}) or {}).get("sov_by_category", {})
+                sov_total_comp = float(((sov_comp.get("current", {}) or {}).get("share_of_voice", 0.0)) or 0.0)
+            except Exception:
+                sov_by_cat_comp = {}
+                sov_total_comp = 0.0
+
+            # Series de sentimiento y visibilidad del competidor
+            try:
+                sent_comp = aggregator.get_sentiment_evolution(None, project_id, start_date=start_date, end_date=end_date, client_brand=comp)
+            except Exception:
+                sent_comp = []
+            try:
+                vis_dates_c, vis_vals_c = aggregator.get_visibility_series(None, project_id, start_date=start_date, end_date=end_date, client_brand=comp)
+            except Exception:
+                vis_dates_c, vis_vals_c = [], []
+
+            # Top/Bottom temas del competidor
+            try:
+                top_c, bottom_c = aggregator.get_topics_by_sentiment(None, project_id, start_date=start_date, end_date=end_date, client_brand=comp)
+            except Exception:
+                top_c, bottom_c = [], []
+
+            # Evidencias: corpus de menciones del competidor (muestras)
+            try:
+                comp_corpus = aggregator.get_all_mentions_for_period(limit=60, project_id=project_id, client_brand=comp, start_date=start_date, end_date=end_date)
+            except Exception:
+                comp_corpus = []
+
+            # Narrativa focalizada: desde la perspectiva de la marca cliente analizando al competidor {comp}
+            comp_narrative = ""
+            try:
+                # Calcular visibilidad media del competidor aquí para incluirla en el prompt
+                try:
+                    vis_avg_c_prompt = float((sum(vis_vals_c) / max(len(vis_vals_c), 1)) if vis_vals_c else 0.0)
+                except Exception:
+                    vis_avg_c_prompt = 0.0
+                comp_agg = {
+                    # KPIs del cliente (marca principal del informe)
+                    "kpis": aggregated.get("kpis", {}),
+                    # Perspectiva: la marca cliente analiza al competidor focal
+                    "client_name": str(brand_name),
+                    "focus_competitor": str(comp),
+                    "competitor_kpis": {
+                        "total_mentions": int(comp_kpis.get("total_mentions", 0)),
+                        "sentiment_avg": float(comp_kpis.get("sentiment_avg", 0.0) or 0.0),
+                        # SOV robusto basado en detección extendida (no solo q.brand)
+                        "sov": float(sov_total_comp),
+                        "visibility_avg": float(vis_avg_c_prompt),
+                    },
+                    "sov_by_category_focus": sov_by_cat_comp,
+                    # Lista de adversarios vista desde la marca cliente
+                    "market_competitors": [b for b in competitors_list if b != comp] + [brand_name],
+                }
+                prompt_comp = s_prompts.get_competitive_analysis_prompt(comp_agg)
+                comp_narrative = fetch_response(prompt_comp, model="gpt-4o-mini", temperature=0.3, max_tokens=700) or ""
+            except Exception:
+                comp_narrative = ""
+
+            # Flancos accionables (2) con cita textual del corpus si es posible
+            comp_flanks: list[str] = []
+            try:
+                import json as _json
+                data_for_flanks = {
+                    "brand": comp,
+                    "top_topics": top_c,
+                    "bottom_topics": bottom_c,
+                    "sov_by_category": sov_by_cat_comp,
+                    "sample_corpus": comp_corpus[:8],
+                }
+                flank_prompt = (
+                    "Eres un Analista de Inteligencia Competitiva. Con los datos, identifica 2 'flancos' explotables del competidor y propone una acción concreta para nuestra marca. "
+                    "Si puedes, incluye una cita breve entre comillas del corpus para evidenciar el flanco. Devuelve 2 bullets, claros y específicos.\n\n"
+                    f"DATOS:\n```json\n{_json.dumps(data_for_flanks, ensure_ascii=False)}\n```"
+                )
+                flank_text = fetch_response(flank_prompt, model="gpt-4o-mini", temperature=0.2, max_tokens=320) or ""
+                comp_flanks = [ln.strip() for ln in flank_text.splitlines() if ln.strip()][:4]
+            except Exception:
+                comp_flanks = []
+
+            # Imágenes por competidor
+            try:
+                img_sent_c = plotter.plot_sentiment_evolution(sent_comp)
+            except Exception:
+                img_sent_c = None
+            try:
+                img_vis_c = plotter.plot_line_series(vis_dates_c, vis_vals_c, title="Visibilidad (%)", ylabel="%", ylim=(0,100), color="#0ea5e9")
+            except Exception:
+                img_vis_c = None
+
+            # KPIs tabla simple
+            try:
+                vis_avg_c = float((sum(vis_vals_c) / max(len(vis_vals_c), 1)) if vis_vals_c else 0.0)
+            except Exception:
+                vis_avg_c = 0.0
+
+            competitor_profiles.append({
+                "name": comp,
+                "kpis": {
+                    "total_mentions": int(comp_kpis.get("total_mentions", 0)),
+                    "sentiment_avg": float(comp_kpis.get("sentiment_avg", 0.0) or 0.0),
+                    "sov": float(comp_kpis.get("sov", 0.0) or 0.0),
+                    "visibility_avg": vis_avg_c,
+                },
+                "top_topics": top_c,
+                "bottom_topics": bottom_c,
+                "narrative": comp_narrative.strip(),
+                "flanks": comp_flanks[:2],
+                "images": {
+                    "sentiment_line": img_sent_c,
+                    "visibility_line": img_vis_c,
+                },
+            })
+    except Exception:
+        competitor_profiles = []
+
+    if competitor_profiles:
+        content_for_pdf["competitor_profiles"] = competitor_profiles
 
     try:
         if sent_evo:
@@ -894,6 +1197,7 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             },
             "action_plan_table": structured_recs,
             "evidence_annex": evidence_index,
+            "competitor_profiles": competitor_profiles,
         },
     }
 

@@ -665,6 +665,14 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
                 text = (strategic.get("competitive_analysis") or "").strip()
                 if text:
                     add_paragraph(pdf, text)
+                # Si hay fichas por competidor, renderizarlas
+                profiles = strategic.get("competitor_profiles") or []
+                if isinstance(profiles, list) and profiles:
+                    try:
+                        add_title(pdf, "Fichas de Competidores")
+                        add_competitor_profiles(pdf, profiles)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
             elif s == "Tendencias y Señales Emergentes":
                 # Preferir gráfico de sentimiento por categoría para alinear visual con el texto
                 try:
@@ -680,6 +688,19 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
                 if text:
                     add_paragraph(pdf, text)
             elif s == "Correlaciones Transversales entre Categorías":
+                # Insertar gráficos si existen
+                try:
+                    add_image(pdf, images.get("sov_sent_scatter"), width=170)
+                except Exception:
+                    pass
+                try:
+                    add_image(pdf, images.get("corr_heatmap"), width=120)
+                except Exception:
+                    pass
+                try:
+                    add_image(pdf, images.get("lag_corr"), width=170)
+                except Exception:
+                    pass
                 text = (strategic.get("correlations") or "").strip()
                 if text:
                     add_paragraph(pdf, text)
@@ -688,6 +709,22 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
         ev = (strategic or {}).get("evidence_annex") if isinstance(strategic, dict) else None
         if isinstance(ev, list) and ev:
             pdf.write_evidence_annex(ev)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    
+    # NUEVO: Anexo — Análisis Detallado del SOV por Categoría
+    try:
+        pdf.add_page()
+        add_title(pdf, "Anexo: Análisis Detallado — SOV por Categoría")
+        if images.get("sov_by_category"):
+            add_chart_with_caption(pdf, images.get("sov_by_category"), caption="SOV del cliente por categoría (% sobre total con marca).", width=180)
+        if images.get("sov_by_category_delta"):
+            add_chart_with_caption(pdf, images.get("sov_by_category_delta"), caption="Δ SOV por categoría vs periodo previo (p.p.).", width=180)
+        cat_texts = (strategic or {}).get("category_analyses") or {}
+        if isinstance(cat_texts, dict) and cat_texts:
+            for cat, txt in list(cat_texts.items())[:10]:
+                add_title(pdf, str(cat))
+                add_paragraph(pdf, str(txt))
     except Exception:
         pass
     # Eliminado Parte 3 según solicitud
@@ -709,3 +746,73 @@ def build_skeleton_from_content(content: Dict) -> bytes:
     images = (content.get("images") or {}) if isinstance(content, dict) else {}
     strategic = (content.get("strategic") or {}) if isinstance(content, dict) else {}
     return build_skeleton_with_content(company_name, images, strategic)
+
+
+# --- NUEVO: Render de fichas por competidor ---
+def add_competitor_profiles(pdf: ReportPDF, profiles: list[dict]):
+    if not isinstance(profiles, list) or not profiles:
+        return
+    for prof in profiles:
+        try:
+            name = str(prof.get("name") or "Competidor")
+            k = prof.get("kpis") or {}
+            top_topics = prof.get("top_topics") or []
+            bottom_topics = prof.get("bottom_topics") or []
+            narrative = (prof.get("narrative") or "").strip()
+            imgs = prof.get("images") or {}
+
+            pdf.add_page()
+            add_title(pdf, f"Ficha del Competidor — {name}")
+
+            # KPIs mini-tabla
+            rows = [
+                ["Métrica", "Valor"],
+                ["Menciones", str(int(k.get("total_mentions", 0)))],
+                ["Sentimiento medio", f"{float(k.get('sentiment_avg', 0.0) or 0.0):.2f}"],
+                ["SOV", f"{float(k.get('sov', 0.0) or 0.0):.1f}%"],
+                ["Visibilidad media", f"{float(k.get('visibility_avg', 0.0) or 0.0):.1f}%"],
+            ]
+            add_table(pdf, rows)
+
+            # Dos columnas de gráficos si existen
+            page_width = pdf.w - 2 * pdf.l_margin
+            col_w = page_width / 2.0
+            y0 = pdf.get_y()
+            pdf.set_xy(pdf.l_margin, y0)
+            if imgs.get("sentiment_line"):
+                add_title(pdf, "Evolución del Sentimiento")
+                try:
+                    pdf.image(imgs.get("sentiment_line"), w=col_w - 6)
+                except Exception:
+                    pass
+            pdf.set_xy(pdf.l_margin + col_w, y0)
+            if imgs.get("visibility_line"):
+                add_title(pdf, "Evolución de la Visibilidad")
+                try:
+                    pdf.image(imgs.get("visibility_line"), w=col_w - 6)
+                except Exception:
+                    pass
+
+            # Narrativa y flancos
+            pdf.ln(4)
+            if narrative:
+                add_title(pdf, "Lectura Estratégica")
+                add_paragraph(pdf, narrative)
+            flanks = prof.get("flanks") or []
+            if isinstance(flanks, list) and flanks:
+                add_title(pdf, "Flancos Explotables (con evidencia)")
+                for f in flanks[:2]:
+                    add_paragraph(pdf, f"- {str(f)}")
+            # Top/Bottom temas
+            if top_topics or bottom_topics:
+                add_title(pdf, "Temas Clave")
+                if top_topics:
+                    add_paragraph(pdf, "Top (más favorables):")
+                    for t, v in top_topics[:5]:
+                        add_paragraph(pdf, f"- {t}: {float(v):.2f}")
+                if bottom_topics:
+                    add_paragraph(pdf, "Bottom (más desfavorables):")
+                    for t, v in bottom_topics[:5]:
+                        add_paragraph(pdf, f"- {t}: {float(v):.2f}")
+        except Exception:
+            continue

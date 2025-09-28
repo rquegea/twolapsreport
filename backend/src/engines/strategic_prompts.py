@@ -25,9 +25,9 @@ def get_detailed_category_prompt(
     _sov_pct = (_client / max(1, _total) * 100.0) if _total > 0 else 0.0
 
     prompt = f"""
-    **ROL:** Eres un Director de Inteligencia de Mercados, especializado en análisis causal y competitivo.
+    **ROL:** Eres un Director de Inteligencia de Mercados, con mas de 40 años en el sector especializado en análisis causal y competitivo.
 
-    **TAREA:** Elaborar un diagnóstico estratégico para la categoría "{category_name}". Explica la dinámica de mercado subyacente que genera los datos.
+    **TAREA:** Elaborar un diagnóstico estratégico para la categoría "{category_name}". Explica la dinámica de mercado subyacente que genera los datos con rigor analítico y causal.
 
     **CONTEXTO ANALÍTICO:**
     - **Categoría de Análisis:** "{category_name}"
@@ -157,6 +157,7 @@ def get_challenger_critique_prompt(
         2. Exige especificidad: cada recomendación debe tener action, metric, owner y due.
         3. Mantén y añade campos: impact, effort, probability, confidence, evidence_ids.
         4. Si hay "evidence_catalog", prioriza evidence_ids que soporten cada punto.
+        5. Prohíbe campañas de marketing genéricas. Si una recomendación es una "campaña" o acciones tipo "SEM/ads/marketing", reescríbela como una acción operativa concreta (académica, producto, operaciones, partnerships, empleabilidad) con owner, KPI y due.
 
         **SALIDA (JSON ESTRICTO, SOLO JSON):**
         {{
@@ -177,7 +178,21 @@ def get_strategic_summary_prompt(insights_json: Dict[str, Any], *, client_name: 
     executive_summary = insights_json.get("executive_summary", "")
     key_findings = insights_json.get("key_findings", [])
     findings_text = "\n- ".join(f'"{finding}"' for finding in key_findings) if key_findings else ""
-    
+
+    # Contexto ampliado opcional
+    ctx = insights_json.get("context", {}) if isinstance(insights_json, dict) else {}
+    try:
+        ctx_json = json.dumps({
+            "competitive_analysis": ctx.get("competitive_analysis"),
+            "trends": ctx.get("trends"),
+            "correlations": ctx.get("correlations"),
+            "action_plan": ctx.get("action_plan"),
+            "sov_by_category": ctx.get("sov_by_category"),
+            "kpis": ctx.get("kpis"),
+        }, ensure_ascii=False, indent=2)
+    except Exception:
+        ctx_json = json.dumps({}, ensure_ascii=False)
+
     prompt = f"""
     **ROL:** Eres un Comunicador Estratégico y Asesor de C-Level. Tu habilidad es transformar datos complejos en una narrativa clara, concisa y persuasiva.
 
@@ -187,14 +202,20 @@ def get_strategic_summary_prompt(insights_json: Dict[str, Any], *, client_name: 
     - **Síntesis Ejecutiva Preliminar:** "{executive_summary}"
     - **Hallazgos Clave Aislados:**
       - {findings_text}
+    - **Contexto Estructurado (usar e integrar):**
+    ```json
+    {ctx_json}
+    ```
 
     **INSTRUCCIONES DE COMUNICACIÓN ESTRATÉGICA:**
-    1.  **Crea una Narrativa:** No enumeres. Teje una historia coherente, usando los hallazgos para sostener la síntesis principal.
+    1.  **Crea una Narrativa:** No enumeres. Teje una historia coherente que integre KPIs, SOV por categoría, análisis competitivo, tendencias, correlaciones y el plan de acción.
     2.  **Enfoque '¿Y qué?':** Transforma cada dato en una implicación estratégica para el negocio.
     3.  **Lenguaje de Decisión:** Utiliza un lenguaje activo y directo para facilitar la toma de decisiones.
+    4.  **Consistencia con el Dossier:** Asegúrate de cubrir los mismos apartados que aparecen en el PDF, evitando contradicciones entre secciones.
+    5.  **Regla:** No menciones carencias de desglose de SOV por categoría. Si hay datos limitados, expresa el grado de confianza sin afirmar que faltan apartados.
 
     **FORMATO DE SALIDA:**
-    Entre 2 y 3 párrafos de prosa ejecutiva, inmediatamente comprensible para un directivo.
+    Entre 10 y 15 párrafos de prosa ejecutiva, inmediatamente comprensible para un directivo.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 
@@ -233,8 +254,13 @@ def get_strategic_plan_prompt(insights_json: Dict[str, Any], *, client_name: str
     3.  **Especificidad y Medición:** Transforma recomendaciones genéricas en iniciativas concretas. Define el "qué" y el "porqué".
     4.  **Secuenciación:** Organiza las acciones en una secuencia lógica (ej. corto/medio plazo).
 
+    **RESTRICCIONES (OBLIGATORIAS):**
+    -  No propongas campañas de marketing (ni "campañas", ni "SEM/ads", ni aumentos de presupuesto publicitario).
+    -  Favorece acciones operativas y de producto/experiencia académica: empleabilidad, partnerships con empresas, currículum, procesos de admisiones/soporte, calidad docente, acuerdos y certificaciones.
+    -  Incluye al menos 2 acciones operativas no de marketing (ejemplos: "Implementar programa de orientación y empleabilidad con 4 talleres/mes", "Firmar 5 convenios de prácticas remuneradas con estudios/productoras en 90 días").
+
     **FORMATO DE SALIDA:**
-    Un texto en prosa, articulado y profesional. Estructúralo en 2-3 párrafos que presenten el plan de forma coherente. NO devuelvas JSON ni listas.
+    Un texto en prosa, articulado y profesional. Estructúralo en 10 y 15 párrafos que presenten el plan de forma coherente. NO devuelvas JSON ni listas.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 
@@ -277,53 +303,72 @@ def get_executive_summary_prompt(aggregated_data: Dict[str, Any]) -> str:
     ```
 
     **DIRECTRICES ESTRATÉGICAS:**
-    1.  **Diagnóstico (Pasado):** ¿Cuál es la historia principal que cuentan los datos? ¿Ganamos o perdimos? ¿En qué campos de batalla (categorías)? Sé directo.
+    1.  **Diagnóstico (Pasado):** ¿Cuál es la historia principal que cuentan los datos? ¿Ganamos o perdimos? ¿En qué campos de batalla (categorías)? Sé directo pero si necesitas analizar un tema en especifico porque encuentras algo interesante hazlo.
     2.  **Implicación (Presente):** ¿Qué significa este diagnóstico para nuestra posición actual? ¿Qué fortalezas consolidar y qué debilidades son críticas?
     3.  **Prescripción (Futuro):** ¿Cuál es la recomendación estratégica número uno que el Consejo debe considerar? Debe ser una acción audaz que responda al análisis.
 
-    **FORMATO:** 2-3 párrafos densos en información, con un lenguaje de alto nivel enfocado en el impacto de negocio.
+    **FORMATO:** 10 y 15 párrafos densos en información, con un lenguaje de alto nivel enfocado en el impacto de negocio y en la visión de futuro.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 
 def get_competitive_analysis_prompt(aggregated_data: Dict[str, Any]) -> str:
     """
     Nivel Élite: Centrado en la explotación de vulnerabilidades competitivas.
+    Soporta perspectiva explícita: {client_name} analiza al {focus_competitor}.
     """
-    kpis = aggregated_data.get('kpis', {}) or {}
+    kpis_client = aggregated_data.get('kpis', {}) or {}
     client_name = aggregated_data.get('client_name', DEFAULT_CLIENT_NAME)
-    sov_total = float(kpis.get('share_of_voice') or kpis.get('sov') or 0.0)
-    sov_table = kpis.get('sov_table') or []
-    competitors = aggregated_data.get('market_competitors') or [str(b) for b, _ in sov_table if str(b) != client_name]
-    sov_by_cat = (aggregated_data.get('sov', {}).get('current', {}).get('sov_by_category') or kpis.get('sov_by_category') or {})
-    competitor_mentions = (aggregated_data.get('sov', {}).get('current', {}).get('competitor_mentions') or {str(b): float(v) for b, v in sov_table})
+    focus = aggregated_data.get('focus_competitor')
+    comp_kpis = aggregated_data.get('competitor_kpis') or {}
+
+    # Datos generales del mercado (para contexto)
+    sov_total_client = float(kpis_client.get('share_of_voice') or kpis_client.get('sov') or 0.0)
+    sov_table = kpis_client.get('sov_table') or []
+
+    # SOV por categoría: permitir bundle específico del competidor
+    sov_by_cat_focus = aggregated_data.get('sov_by_category_focus') or (
+        aggregated_data.get('sov', {}).get('current', {}).get('sov_by_category')
+    ) or kpis_client.get('sov_by_category') or {}
+
+    # Pulso de la competencia (si viene del bundle general)
+    competitor_mentions = (
+        aggregated_data.get('sov', {}).get('current', {}).get('competitor_mentions')
+        or {str(b): float(v) for b, v in sov_table}
+    )
+
     comp_json = json.dumps(competitor_mentions, ensure_ascii=False, indent=2)
-    sov_cat_json = json.dumps(sov_by_cat, ensure_ascii=False, indent=2)
+    sov_cat_json = json.dumps(sov_by_cat_focus, ensure_ascii=False, indent=2)
+    comp_kpis_json = json.dumps(comp_kpis, ensure_ascii=False, indent=2)
 
     prompt = (
         f"""
     **ROL:** Eres un Analista de Inteligencia Competitiva, experto en identificar y explotar las debilidades del adversario.
 
-    **TAREA:** Redactar un informe de "Análisis Competitivo y Estrategias de Ataque" para {client_name}.
+    **PERSPECTIVA:** {client_name} analiza al competidor focal {focus or 'N/D'}. No confundas roles: {client_name} = nuestra marca; {focus or 'N/D'} = competidor a evaluar.
 
     **DOSSIER DE INTELIGENCIA:**
     - Cliente: {client_name}
-    - Adversarios: {', '.join(competitors) if competitors else 'N/D'}
-    - SOV del Cliente: {sov_total:.2f}%
-    - Mapa de Territorios (SOV por categoría):
+    - Competidor focal: {focus or 'N/D'}
+    - SOV del Cliente (Total): {sov_total_client:.2f}%
+    - KPIs del Competidor Focal (usar SOV extendido si está disponible):
+    ```json
+    {comp_kpis_json}
+    ```
+    - Territorios del Competidor (SOV por categoría):
     ```json
     {sov_cat_json}
     ```
-    - Actividad del Adversario (Menciones):
+    - Actividad del mercado por marca (menciones):
     ```json
     {comp_json}
     ```
 
     **PROTOCOLO DE ANÁLISIS:**
-    1.  **Identificar al Líder y sus Flancos Débiles:** ¿Quién domina la conversación general? Más importante, ¿en qué categoría su dominio es más frágil o su sentimiento es negativo a pesar del alto volumen? Ese es su flanco débil.
-    2.  **Detectar "Movimientos de Guerrilla":** ¿Hay algún competidor pequeño ganando una cuota desproporcionada en una categoría nicho? Analiza su estrategia.
-    3.  **Formular Estrategias de "Flanqueo":** Define 3 movimientos estratégicos para {client_name}. No te limites a "atacar", piensa en cómo "flanquear": ganar donde el competidor no es fuerte. Cada recomendación debe ser un bullet point accionable.
+    1.  **Identificar Fortalezas y Flancos del Competidor Focal:** ¿Dónde concentra cuota (SOV%) y con qué sentimiento? Señala 1-2 flancos explotables.
+    2.  **Guerrilla por Categoría:** Detecta nichos donde {client_name} pueda ganar terreno rápidamente frente a {focus or 'el competidor'}.
+    3.  **Estrategias de Flanqueo (3-5 bullets):** Acciones específicas para {client_name} directamente orientadas a arrebatar cuota y mejorar percepción.
 
-    **FORMATO:** Un análisis conciso que identifique al líder, sus debilidades y proponga 3 estrategias de flanqueo claras.
+    **FORMATO:** Texto ejecutivo orientado a decisión. No narres sobre el cliente equivocado.
     """
     )
     return prompt + ANALYTICAL_RIGOR_FOOTER
@@ -356,7 +401,7 @@ def get_deep_dive_analysis_prompt(category_name: str, kpis: Dict[str, Any], clie
     2.  **La Tensión en los Temas:** ¿Qué conflicto o tensión revelan los temas clave? (ej. alta frecuencia de "precio" y "calidad" sugiere una tensión en torno al valor percibido).
     3.  **El Insight Oculto y la Oportunidad:** Conecta la emoción (sentimiento) con la tensión (temas) para desvelar una necesidad no satisfecha. A partir de este insight, formula una oportunidad de innovación para {client_name}.
 
-    **FORMATO:** Un párrafo de análisis narrativo que revele la psicología del consumidor y concluya con una oportunidad de innovación clara.
+    **FORMATO:** 3 párrafos de análisis narrativo que revele la psicología del consumidor y concluya con una oportunidad de innovación clara.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 
@@ -368,22 +413,24 @@ def get_correlation_interpretation_prompt(aggregated_data: Dict[str, Any], corre
     client_name = aggregated_data.get('client_name', DEFAULT_CLIENT_NAME)
     
     prompt = f"""
-    **ROL:** Eres un Científico de Datos especializado en inferencia causal.
+    **ROL:** Científico de Datos experto en inferencia causal aplicada a marketing para {client_name}.
 
-    **TAREA:** Interpretar los datos de correlación para {client_name}, distinguir causalidad de casualidad y proponer experimentos para validar tus hipótesis.
+    **TAREA:** Redactar la sección "Correlaciones Transversales entre Categorías" combinando cuantitativo (Pearson r, matriz, lags) y lectura estratégica por categoría (SOV% vs Sentimiento). Odia las vaguedades: cada conclusión debe incluir un dato y una acción.
 
-    **DATOS DE CORRELACIÓN:**
+    **DATOS:**
     ```json
     {data_json}
     ```
 
-    **METODOLOGÍA DE ANÁLISIS CAUSAL:**
-    1.  **Identificar Correlaciones Significativas:** Enfócate en las 2-3 relaciones con la mayor fuerza ("strength").
-    2.  **Formular Hipótesis Causales:** Para cada correlación, propón una hipótesis de relación causa-efecto.
-    3.  **Proponer un Plan de Validación:** Para cada hipótesis, diseña un "experimento" o análisis que podría validarla o refutarla.
-    4.  **Implicación de Negocio:** Si la hipótesis causal fuera cierta, ¿cuál sería la implicación estratégica para {client_name}?
+    **GUÍA DE ANÁLISIS (OBLIGATORIA):**
+    1.  **Resumen Ejecutivo (3 bullets):** Los 3 hallazgos más relevantes con su implicación.
+    2.  **Matriz de Correlaciones (menciones, visibilidad, sentimiento):** Explica signo, magnitud (|r|) y n. Señala relaciones espurias potenciales.
+    3.  **Correlación Temporal con Desfase (±7 días):** Indica el mejor lag volumen→sentimiento y cómo interpretarlo operativamente.
+    4.  **Cuadrantes por Categoría (SOV% vs Sentimiento):** Lista Top 3 "OPORTUNIDAD" y Top 3 "RIESGO" con CTA concreto por cada una.
+    5.  **Hipótesis Causales + Validación:** Para 2-3 relaciones fuertes, formula hipótesis, experimento A/B (métrica, tamaño muestral aproximado, duración) y criterio de éxito.
+    6.  **Limitaciones y Próximos Pasos:** Qué no se puede concluir aún y qué analizar a continuación.
 
-    **FORMATO:** Redacta 2-3 párrafos. Cada uno debe presentar una correlación, la hipótesis causal, el plan de validación y la implicación estratégica.
+    **FORMATO:** Texto ejecutivo con subtítulos (como arriba) y bullets donde sea útil. Cita r y n siempre que menciones una correlación.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 
@@ -411,7 +458,7 @@ def get_trends_anomalies_prompt(aggregated_data: Dict[str, Any]) -> str:
     3.  **De Señal Débil a Tendencia Fuerte:** Para los tópicos emergentes, evalúa su potencial. ¿Es una "señal débil" (pasajera) o una "tendencia fuerte" (estructural)? Justifica tu evaluación.
     4.  **Implicaciones Estratégicas y Tácticas:** Concluye con 2 recomendaciones estratégicas (a 12-18 meses) y 3 tácticas inmediatas (a 30-60 días).
 
-    **FORMATO:** Un análisis ejecutivo que siga el framework descrito.
+    **FORMATO:** Un análisis ejecutivo que siga el framework descrito con detalle de todo lo que esta pasando.
     """
     return prompt + ANALYTICAL_RIGOR_FOOTER
 

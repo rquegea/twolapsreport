@@ -1,0 +1,61 @@
+{
+  "executive_summary": "The Core School holds a competitive position in the audiovisual education market, but faces challenges in visibility and sentiment compared to leading competitors. Strategic improvements in marketing and industry connections could enhance its market share and reputation.",
+  "key_findings": [
+    "The Core School's share of voice is lower than major competitors like CES and ECAM, indicating a need for increased marketing efforts.",
+    "Sentiment analysis reveals a generally positive perception, but there are concerns about employability and stability in the audiovisual sector.",
+    "Visibility spikes suggest potential opportunities for leveraging media events to boost brand presence."
+  ],
+  "opportunities": [
+    {
+      "opportunity": "Enhance partnerships with industry leaders to improve employability perceptions.",
+      "impact": "Alto",
+      "probability": "Media",
+      "effort": "Medio",
+      "confidence": "Media",
+      "evidence_ids": [
+        "1323",
+        "845",
+        "1101"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Negative perceptions about job stability in the audiovisual sector could deter potential students.",
+      "mitigation": "Develop targeted communication strategies to address these concerns.",
+      "impact": "Medio",
+      "probability": "Alta",
+      "evidence_ids": [
+        "1154",
+        "579",
+        "643"
+      ]
+    }
+  ],
+  "recommendations": [
+    "Increase marketing efforts to improve share of voice, focusing on digital platforms.",
+    "Strengthen industry connections to enhance the perceived value of the education offered."
+  ],
+  "time_series_analysis": {
+    "global": {
+      "trend_description": "The sentiment shows a slight upward trend with moderate volatility, while visibility exhibits high volatility with significant fluctuations.",
+      "anomalies": [
+        {
+          "date": "2025-09-22",
+          "metric": "sentimiento",
+          "magnitude": "+0.04",
+          "causal_hypothesis": "Increased positive mentions due to a successful event or campaign.",
+          "confidence": "Media"
+        },
+        {
+          "date": "2025-09-25",
+          "metric": "visibilidad",
+          "magnitude": "+59.4",
+          "causal_hypothesis": "Potential media coverage or partnership announcement.",
+          "confidence": "Alta"
+        }
+      ],
+      "sentiment_vs_volume_correlation": "There is a weak positive correlation between sentiment and volume, suggesting that increased mentions do not necessarily improve sentiment."
+    }
+  }
+}

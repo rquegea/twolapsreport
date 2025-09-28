@@ -1,0 +1,54 @@
+{
+  "executive_summary": "The Core Escuela Superior de Audiovisuales maintains a competitive position in the market with a 14% share of voice, but faces challenges in sentiment volatility and parental concerns about employability. Strategic focus on enhancing industry connections and addressing employability concerns could improve market perception and student attraction.",
+  "key_findings": [
+    "The Core Escuela Superior de Audiovisuales holds a 14% share of voice, positioning it as a significant player in the audiovisual education market.",
+    "Parental concerns about employability and economic stability in the audiovisual sector present a risk to student enrollment.",
+    "The sentiment analysis indicates a generally positive perception, but with notable volatility that could impact brand stability."
+  ],
+  "opportunities": [
+    {
+      "opportunity": "Enhance partnerships with industry leaders to improve employability perceptions.",
+      "impact": "Alto",
+      "probability": "Alta",
+      "effort": "Medio",
+      "confidence": "Media",
+      "evidence_ids": [
+        "1323",
+        "845",
+        "1101"
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Parental concerns about employability and economic stability in the audiovisual sector.",
+      "mitigation": "Develop targeted communication strategies highlighting successful alumni and industry connections.",
+      "impact": "Alto",
+      "probability": "Media",
+      "evidence_ids": [
+        "1154",
+        "579",
+        "643"
+      ]
+    }
+  ],
+  "recommendations": [
+    "Strengthen industry partnerships to enhance the employability of graduates.",
+    "Implement a communication campaign to address parental concerns about career stability in the audiovisual sector."
+  ],
+  "time_series_analysis": {
+    "global": {
+      "trend_description": "The sentiment shows a slight upward trend with moderate volatility, fluctuating between 0.57 and 0.64 over the observed period.",
+      "anomalies": [
+        {
+          "date": "2025-09-22",
+          "metric": "sentimiento",
+          "magnitude": "+0.04",
+          "causal_hypothesis": "Increased positive mentions due to a successful event or campaign.",
+          "confidence": "Media"
+        }
+      ],
+      "sentiment_vs_volume_correlation": "There is a moderate positive correlation between sentiment and volume, suggesting that increased mentions tend to coincide with positive sentiment spikes."
+    }
+  }
+}

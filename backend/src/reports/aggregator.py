@@ -1481,21 +1481,169 @@ def get_full_report_data(
         except Exception:
             mv_series = []
         try:
+            # Mapas por fecha
             sent_map = {d: float(v) for d, v in (evo or [])}
             vol_map = {d: int(c) for d, c in (mv_series or [])}
-            common = sorted(set(sent_map.keys()) & set(vol_map.keys()))
-            x = np.array([float(vol_map[d]) for d in common], dtype=float)
-            y = np.array([float(sent_map[d]) for d in common], dtype=float)
-            if x.size >= 3 and float(np.std(x)) > 1e-9 and float(np.std(y)) > 1e-9:
-                r = float(np.corrcoef(x, y)[0, 1])
-            else:
-                r = None
-            basic_correlations = {
-                "sentiment_vs_mentions": {
-                    "pearson_r": r,
-                    "n": int(x.size),
-                }
-            }
+            vis_dates_list, vis_vals_list = visibility_series
+            vis_map = {d: float(v) for d, v in zip(vis_dates_list, vis_vals_list)}
+
+            basic_correlations = {}
+
+            # Correlación: Sentimiento vs Volumen de menciones (diaria)
+            try:
+                common = sorted(set(sent_map.keys()) & set(vol_map.keys()))
+                x = np.array([float(vol_map[d]) for d in common], dtype=float)
+                y = np.array([float(sent_map[d]) for d in common], dtype=float)
+                if x.size >= 3 and float(np.std(x)) > 1e-9 and float(np.std(y)) > 1e-9:
+                    r = float(np.corrcoef(x, y)[0, 1])
+                else:
+                    r = None
+                basic_correlations["sentiment_vs_mentions"] = {"pearson_r": r, "n": int(x.size)}
+            except Exception:
+                basic_correlations["sentiment_vs_mentions"] = {"pearson_r": None, "n": 0}
+
+            # Correlación: Visibilidad vs Volumen de menciones (diaria)
+            try:
+                common = sorted(set(vis_map.keys()) & set(vol_map.keys()))
+                x = np.array([float(vol_map[d]) for d in common], dtype=float)
+                y = np.array([float(vis_map[d]) for d in common], dtype=float)
+                if x.size >= 3 and float(np.std(x)) > 1e-9 and float(np.std(y)) > 1e-9:
+                    r = float(np.corrcoef(x, y)[0, 1])
+                else:
+                    r = None
+                basic_correlations["visibility_vs_mentions"] = {"pearson_r": r, "n": int(x.size)}
+            except Exception:
+                basic_correlations["visibility_vs_mentions"] = {"pearson_r": None, "n": 0}
+
+            # Correlación: Visibilidad vs Sentimiento (diaria)
+            try:
+                common = sorted(set(vis_map.keys()) & set(sent_map.keys()))
+                x = np.array([float(vis_map[d]) for d in common], dtype=float)
+                y = np.array([float(sent_map[d]) for d in common], dtype=float)
+                if x.size >= 3 and float(np.std(x)) > 1e-9 and float(np.std(y)) > 1e-9:
+                    r = float(np.corrcoef(x, y)[0, 1])
+                else:
+                    r = None
+                basic_correlations["visibility_vs_sentiment"] = {"pearson_r": r, "n": int(x.size)}
+            except Exception:
+                basic_correlations["visibility_vs_sentiment"] = {"pearson_r": None, "n": 0}
+
+            # Correlación transversal por categoría: cuota (SOV%) vs sentimiento por categoría (marca)
+            try:
+                curr = sov_trends.get("current", {}) if isinstance(sov_trends, dict) else {}
+                sov_by_cat = curr.get("sov_by_category", {}) if isinstance(curr, dict) else {}
+                by_cat_map = by_cat if isinstance(by_cat, dict) else {}
+                cats = sorted(set([str(c) for c in sov_by_cat.keys()]) & set([str(c) for c in by_cat_map.keys()]))
+                if cats:
+                    x_vals = []  # SOV% cliente por categoría
+                    y_vals = []  # Sentimiento por categoría
+                    for c in cats:
+                        entry = sov_by_cat.get(c, {})
+                        client = float(entry.get("client", 0)) if isinstance(entry, dict) else 0.0
+                        total = float(entry.get("total", 0)) if isinstance(entry, dict) else 0.0
+                        sov_pct = (client / max(total, 1.0)) * 100.0 if total > 0 else 0.0
+                        x_vals.append(sov_pct)
+                        y_vals.append(float(by_cat_map.get(c) or 0.0))
+                    x_arr = np.array(x_vals, dtype=float)
+                    y_arr = np.array(y_vals, dtype=float)
+                    if x_arr.size >= 3 and float(np.std(x_arr)) > 1e-9 and float(np.std(y_arr)) > 1e-9:
+                        r = float(np.corrcoef(x_arr, y_arr)[0, 1])
+                    else:
+                        r = None
+                    basic_correlations["category_sov_vs_sentiment"] = {"pearson_r": r, "n": int(x_arr.size)}
+                else:
+                    basic_correlations["category_sov_vs_sentiment"] = {"pearson_r": None, "n": 0}
+            except Exception:
+                basic_correlations["category_sov_vs_sentiment"] = {"pearson_r": None, "n": 0}
+
+            # Correlaciones con desfase (lag) volumen -> sentimiento +/- 7 días
+            try:
+                common = sorted(set(sent_map.keys()) & set(vol_map.keys()))
+                if common:
+                    vol = np.array([float(vol_map[d]) for d in common], dtype=float)
+                    sen = np.array([float(sent_map[d]) for d in common], dtype=float)
+
+                    def _pearson(a: np.ndarray, b: np.ndarray) -> float | None:
+                        try:
+                            if a.size >= 5 and float(np.std(a)) > 1e-9 and float(np.std(b)) > 1e-9:
+                                return float(np.corrcoef(a, b)[0, 1])
+                            return None
+                        except Exception:
+                            return None
+
+                    lag_series: list[dict] = []
+                    for L in range(-7, 8):
+                        if L < 0:
+                            r = _pearson(vol[-L:], sen[: len(sen) + L])
+                        elif L > 0:
+                            r = _pearson(vol[: len(vol) - L], sen[L:])
+                        else:
+                            r = _pearson(vol, sen)
+                        lag_series.append({"lag": int(L), "r": (None if r is None else float(r))})
+                    best = max([x for x in lag_series if x["r"] is not None], key=lambda x: x["r"], default={"lag": 0, "r": None})
+                    basic_correlations["lags_volume_to_sentiment"] = {"series": lag_series, "best": best}
+                else:
+                    basic_correlations["lags_volume_to_sentiment"] = {"series": [], "best": {"lag": 0, "r": None}}
+            except Exception:
+                basic_correlations["lags_volume_to_sentiment"] = {"series": [], "best": {"lag": 0, "r": None}}
+
+            # Matriz de correlaciones (menciones, visibilidad, sentimiento) alineadas por fecha
+            try:
+                common = sorted(set(sent_map.keys()) & set(vol_map.keys()) & set(vis_map.keys()))
+                if common:
+                    M = np.array([float(vol_map[d]) for d in common], dtype=float)
+                    V = np.array([float(vis_map[d]) for d in common], dtype=float)
+                    S = np.array([float(sent_map[d]) for d in common], dtype=float)
+                    mat = np.corrcoef(np.vstack([M, V, S]))
+                    basic_correlations["matrix"] = {"labels": ["mentions", "visibility", "sentiment"], "values": mat.tolist(), "n": int(len(common))}
+                else:
+                    basic_correlations["matrix"] = {"labels": [], "values": [], "n": 0}
+            except Exception:
+                basic_correlations["matrix"] = {"labels": [], "values": [], "n": 0}
+
+            # Cuadrantes por categoría (SOV% vs Sentimiento) y top oportunidades/risgos
+            try:
+                curr = sov_trends.get("current", {}) if isinstance(sov_trends, dict) else {}
+                sov_by_cat = curr.get("sov_by_category", {}) if isinstance(curr, dict) else {}
+                cats = sorted(set([str(c) for c in (sov_by_cat or {}).keys()]) & set([str(c) for c in (by_cat or {}).keys()]))
+                rows: list[dict] = []
+                for c in cats:
+                    entry = sov_by_cat.get(c, {}) if isinstance(sov_by_cat, dict) else {}
+                    client = float(entry.get("client", 0)) if isinstance(entry, dict) else 0.0
+                    total = float(entry.get("total", 0)) if isinstance(entry, dict) else 0.0
+                    sov_pct = (client / max(total, 1.0)) * 100.0 if total > 0 else 0.0
+                    rows.append({"category": c, "sov_pct": sov_pct, "sentiment": float((by_cat or {}).get(c, 0.0))})
+                if rows:
+                    sov_thr = float(np.median([r["sov_pct"] for r in rows]))
+                    sen_thr = float(np.median([r["sentiment"] for r in rows]))
+                    for r in rows:
+                        if r["sov_pct"] >= sov_thr and r["sentiment"] >= sen_thr:
+                            r["quadrant"] = "DEFENDER"
+                        elif r["sov_pct"] >= sov_thr and r["sentiment"] < sen_thr:
+                            r["quadrant"] = "RIESGO"
+                        elif r["sov_pct"] < sov_thr and r["sentiment"] >= sen_thr:
+                            r["quadrant"] = "OPORTUNIDAD"
+                        else:
+                            r["quadrant"] = "DESATENDIDO"
+
+                    def _score_opp(r: dict) -> float:
+                        return (r["sentiment"] - sen_thr) * max(0.0, (sov_thr - r["sov_pct"]))
+
+                    def _score_risk(r: dict) -> float:
+                        return (r["sov_pct"] - sov_thr) * max(0.0, (sen_thr - r["sentiment"]))
+
+                    top_opportunities = sorted([r for r in rows if r.get("quadrant") == "OPORTUNIDAD"], key=_score_opp, reverse=True)[:3]
+                    top_risks = sorted([r for r in rows if r.get("quadrant") == "RIESGO"], key=_score_risk, reverse=True)[:3]
+                    basic_correlations["category_quadrants"] = {
+                        "thresholds": {"sov_pct": sov_thr, "sentiment": sen_thr},
+                        "rows": rows,
+                        "top_opportunities": top_opportunities,
+                        "top_risks": top_risks,
+                    }
+                else:
+                    basic_correlations["category_quadrants"] = {"thresholds": {}, "rows": [], "top_opportunities": [], "top_risks": []}
+            except Exception:
+                basic_correlations["category_quadrants"] = {"thresholds": {}, "rows": [], "top_opportunities": [], "top_risks": []}
         except Exception:
             basic_correlations = {}
 
