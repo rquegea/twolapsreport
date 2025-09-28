@@ -98,6 +98,8 @@ def get_insight_extraction_prompt(aggregated_data: Dict[str, Any]) -> str:
     json_format_structure = """
     {
       "executive_summary": "El insight más crítico y su implicación de negocio en 2 frases.",
+      "assumptions": ["Suposición clave 1", "Suposición clave 2"],
+      "limitations": ["Limitación de dato 1", "Limitación de dato 2"],
       "time_series_analysis": {
         "global": {
           "trend_description": "Descripción cuantificada de la tendencia y volatilidad.",
@@ -106,9 +108,10 @@ def get_insight_extraction_prompt(aggregated_data: Dict[str, Any]) -> str:
         }
       },
       "key_findings": ["Hallazgo estratégico 1", "Hallazgo estratégico 2", "Hallazgo estratégico 3"],
-      "opportunities": [ { "opportunity": "Descripción", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja" } ],
-      "risks": [ { "risk": "Descripción", "mitigation": "Acción específica", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja" } ],
-      "recommendations": [ "Acción medible 1", "Acción medible 2" ]
+      "opportunities": [ { "opportunity": "Descripción", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja", "effort": "Bajo|Medio|Alto", "confidence": "Alta|Media|Baja", "evidence_ids": ["id1","id2"] } ],
+      "risks": [ { "risk": "Descripción", "mitigation": "Acción específica", "impact": "Alto|Medio|Bajo", "probability": "Alta|Media|Baja", "evidence_ids": ["id1"] } ],
+      "recommendations": [ "Acción medible 1", "Acción medible 2" ],
+      "recommendations_structured": [ { "action": "Acción concreta", "metric": "KPI medible", "owner": "Equipo/Persona", "due": "Q4 2025", "impact": "Alto|Medio|Bajo", "effort": "Bajo|Medio|Alto", "probability": "Alta|Media|Baja", "confidence": "Alta|Media|Baja", "evidence_ids": ["id1","id2"] } ]
     }
     """
 
@@ -128,6 +131,47 @@ def get_insight_extraction_prompt(aggregated_data: Dict[str, Any]) -> str:
         f"**FORMATO DE SALIDA (JSON ESTRICTO):**\n{json_format_structure}"
     )
     return prompt + ANALYTICAL_RIGOR_FOOTER
+
+def get_challenger_critique_prompt(
+    data: Dict[str, Any], *, client_name: str | None = None
+) -> str:
+    """
+    "Challenger" crítico: cuestiona, depura y fortalece las oportunidades/risks/recomendaciones.
+    Devuelve JSON con sufijo _refined. Puede aprovechar un catálogo de evidencias.
+    """
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    brand = client_name or data.get("client_name") or DEFAULT_CLIENT_NAME
+    return (
+        f"""
+        **ROL:** Actúas como un 'Challenger' escéptico y orientado a resultados para {brand}.
+
+        **TAREA:** Revisar críticamente oportunidades, riesgos y recomendaciones. Elimina vaguedades, exige evidencia y convierte ideas genéricas en acciones SMART.
+
+        **DATOS DE ENTRADA (JSON):**
+        ```json
+        {payload}
+        ```
+
+        **REGLAS:**
+        1. Elimina elementos que no tengan vínculo claro con datos o evidencias.
+        2. Exige especificidad: cada recomendación debe tener action, metric, owner y due.
+        3. Mantén y añade campos: impact, effort, probability, confidence, evidence_ids.
+        4. Si hay "evidence_catalog", prioriza evidence_ids que soporten cada punto.
+
+        **SALIDA (JSON ESTRICTO, SOLO JSON):**
+        {{
+          "opportunities_refined": [
+            {{"opportunity": "...", "impact": "Alto", "probability": "Alta", "effort": "Medio", "confidence": "Media", "evidence_ids": ["..."]}}
+          ],
+          "risks_refined": [
+            {{"risk": "...", "mitigation": "...", "impact": "Alto", "probability": "Media", "evidence_ids": ["..."]}}
+          ],
+          "recommendations_refined": [
+            {{"action": "...", "metric": "...", "owner": "...", "due": "Q4 2025", "impact": "Alto", "effort": "Medio", "probability": "Alta", "confidence": "Alta", "evidence_ids": ["..."]}}
+          ]
+        }}
+        """
+    ) + ANALYTICAL_RIGOR_FOOTER
 
 def get_strategic_summary_prompt(insights_json: Dict[str, Any], *, client_name: str) -> str:
     executive_summary = insights_json.get("executive_summary", "")

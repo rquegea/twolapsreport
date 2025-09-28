@@ -1,6 +1,6 @@
 from typing import Dict, List, Any
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import aggregator
 from . import plotter
@@ -484,6 +484,43 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             """), {"pid": int(project_id), "start": s_date, "end": e_date}).first()
             total_mentions = int(total_mentions_row[0] if total_mentions_row and total_mentions_row[0] is not None else 0)
 
+        #    Motores de IA utilizados en el periodo (para ficha técnica)
+        ai_engines_used: list[str] = []
+        try:
+            rows = session.execute(_text(
+                """
+                SELECT DISTINCT LOWER(COALESCE(m.engine, '')) AS engine,
+                                COALESCE(m.model_name, '') AS model_name
+                FROM mentions m
+                JOIN queries q ON q.id = m.query_id
+                WHERE COALESCE(q.project_id, q.id) = COALESCE((SELECT project_id FROM queries WHERE id = :pid), :pid)
+                  AND m.created_at >= CAST(:start AS date)
+                  AND m.created_at < (CAST(:end AS date) + INTERVAL '1 day')
+                """
+            ), {"pid": int(project_id), "start": s_date, "end": e_date}).all()
+
+            labels: set[str] = set()
+            for eng, model in rows:
+                eng_l = (eng or "").lower().strip()
+                mdl = (model or "").strip()
+                if not eng_l and not mdl:
+                    continue
+                # OpenAI
+                if eng_l.startswith("gpt") or mdl.lower().startswith("gpt"):
+                    labels.add(f"OpenAI {mdl or 'GPT'}")
+                    continue
+                # Perplexity
+                if "pplx" in eng_l or "perplexity" in mdl.lower() or "sonar" in mdl.lower():
+                    lbl = f"Perplexity {mdl}".strip()
+                    labels.add(lbl if lbl != "Perplexity" else "Perplexity")
+                    continue
+                # Fallback: usar el nombre del engine si existe
+                if eng_l:
+                    labels.add(eng_l.upper())
+            ai_engines_used = sorted([l for l in labels if l])
+        except Exception:
+            ai_engines_used = []
+
         # 3) Insights del agente para Parte 2
         agent_insights = aggregator.get_agent_insights_data(session, project_id, limit=200)
         # Nuevo: permitir inyectar clusters precalculados para evitar recomputar
@@ -502,6 +539,94 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
     else:
         competitors_list = [str(n) for n, _ in sov_pairs if str(n).strip() != str(brand_name).strip()]
 
+    # --- Deltas y benchmark (previo periodo de igual longitud) ---
+    prev_start_date: str | None = None
+    prev_end_date: str | None = None
+    try:
+        if start_date and end_date:
+            from datetime import datetime as _dt, timedelta as _td
+            sd = _dt.strptime(start_date, "%Y-%m-%d").date()
+            ed = _dt.strptime(end_date, "%Y-%m-%d").date()
+            span = (ed - sd).days + 1
+            prev_end = sd - _td(days=1)
+            prev_start = prev_end - _td(days=span - 1)
+            prev_start_date = prev_start.strftime("%Y-%m-%d")
+            prev_end_date = prev_end.strftime("%Y-%m-%d")
+    except Exception:
+        prev_start_date, prev_end_date = None, None
+
+    # Recalcular referencias previas si hay ventana previa
+    sov_prev_brand = None
+    sent_prev_avg = None
+    vis_prev_avg = None
+    try:
+        if prev_start_date and prev_end_date:
+            sess2 = aggregator.get_session()
+            try:
+                sov_prev_pairs = aggregator.get_industry_sov_ranking(sess2, project_id, start_date=prev_start_date, end_date=prev_end_date)
+                sov_prev_brand = next((float(v or 0.0) for n, v in sov_prev_pairs if str(n).strip() == str(brand_name).strip()), 0.0)
+                sent_prev_series = aggregator.get_sentiment_evolution(sess2, project_id, start_date=prev_start_date, end_date=prev_end_date, client_brand=client_brand)
+                sent_prev_avg = (sum(v for _, v in sent_prev_series) / max(len(sent_prev_series), 1)) if sent_prev_series else 0.0
+                vis_prev_dates, vis_prev_vals = aggregator.get_visibility_series(sess2, project_id, start_date=prev_start_date, end_date=prev_end_date, client_brand=client_brand)
+                vis_prev_avg = (sum(vis_prev_vals) / max(len(vis_prev_vals), 1)) if vis_prev_vals else 0.0
+            finally:
+                sess2.close()
+    except Exception:
+        sov_prev_brand, sent_prev_avg, vis_prev_avg = None, None, None
+
+    # Calcular deltas simples (MoM/WoW dependiendo de la ventana)
+    try:
+        sov_delta = (brand_sov - float(sov_prev_brand)) if sov_prev_brand is not None else None
+    except Exception:
+        sov_delta = None
+    try:
+        vis_curr_avg = (sum(vis_vals) / max(len(vis_vals), 1)) if vis_vals else 0.0
+        vis_delta = (vis_curr_avg - float(vis_prev_avg)) if vis_prev_avg is not None else None
+    except Exception:
+        vis_delta = None
+    try:
+        sent_delta = (float(sentiment_avg) - float(sent_prev_avg)) if sent_prev_avg is not None else None
+    except Exception:
+        sent_delta = None
+
+    # Detectar anomalías simples en volumen de menciones, sentimiento y visibilidad
+    anomalies: list[dict[str, object]] = []
+    try:
+        mv_series = aggregator.get_mentions_volume_series(None, project_id, start_date=start_date, end_date=end_date)
+        # Porcentaje de cambio día a día y marcar top 2
+        changes: list[tuple[str, float]] = []
+        for i in range(1, len(mv_series)):
+            _, c0 = mv_series[i - 1]
+            d1, c1 = mv_series[i]
+            base = max(1, int(c0 or 0))
+            pct = (int(c1 or 0) - base) / float(base)
+            changes.append((d1, pct))
+        for d, pct in sorted(changes, key=lambda x: abs(x[1]), reverse=True)[:2]:
+            anomalies.append({"date": d, "metric": "menciones", "magnitude": f"{pct:+.0%}", "causal_hypothesis": "Revisión manual sugerida", "confidence": "Media"})
+        # Anomalía en sentimiento: pico y valle
+        if sent_evo:
+            min_day, min_val = min(sent_evo, key=lambda x: x[1])
+            max_day, max_val = max(sent_evo, key=lambda x: x[1])
+            anomalies.append({"date": max_day, "metric": "sentimiento", "magnitude": f"{max_val:+.2f}", "causal_hypothesis": "Revisión cualitativa de menciones", "confidence": "Baja"})
+            anomalies.append({"date": min_day, "metric": "sentimiento", "magnitude": f"{min_val:+.2f}", "causal_hypothesis": "Revisión cualitativa de menciones", "confidence": "Baja"})
+        # Anomalías de visibilidad (misma serie que el gráfico)
+        if vis_dates and vis_vals and len(vis_vals) >= 2:
+            # Deltas día a día en puntos porcentuales
+            vis_changes: list[tuple[str, float]] = []
+            for i in range(1, len(vis_vals)):
+                d = vis_dates[i]
+                diff_pp = float(vis_vals[i]) - float(vis_vals[i-1])
+                vis_changes.append((d, diff_pp))
+            for d, diff_pp in sorted(vis_changes, key=lambda x: abs(x[1]), reverse=True)[:2]:
+                anomalies.append({"date": d, "metric": "visibilidad", "magnitude": f"{diff_pp:+.1f} pp", "causal_hypothesis": "Cambio abrupto en apariciones por consulta", "confidence": "Media"})
+            # Registrar pico y valle absolutos
+            max_idx = int(max(range(len(vis_vals)), key=lambda i: vis_vals[i]))
+            min_idx = int(min(range(len(vis_vals)), key=lambda i: vis_vals[i]))
+            anomalies.append({"date": vis_dates[max_idx], "metric": "visibilidad", "magnitude": f"{float(vis_vals[max_idx]):.1f}%", "causal_hypothesis": "Máximo de presencia por consulta", "confidence": "Media"})
+            anomalies.append({"date": vis_dates[min_idx], "metric": "visibilidad", "magnitude": f"{float(vis_vals[min_idx]):.1f}%", "causal_hypothesis": "Mínimo de presencia por consulta", "confidence": "Media"})
+    except Exception:
+        pass
+
     aggregated: Dict[str, Any] = {
         "kpis": {
             "total_mentions": total_mentions,
@@ -513,6 +638,12 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             "brand_name": brand_name,
             # Añadir sentimientos por categoría para deep-dives por tema
             "sentiment_by_category": by_cat,
+            # Deltas resumidos (si disponibles)
+            "delta_sov_prev": float(sov_delta) if sov_delta is not None else None,
+            "delta_sentiment_prev": float(sent_delta) if sent_delta is not None else None,
+            "delta_visibility_prev": float(vis_delta) if vis_delta is not None else None,
+            # Visibilidad media (misma definición que el gráfico)
+            "visibility_avg": float((sum(vis_vals) / max(len(vis_vals), 1)) if vis_vals else 0.0),
         },
         "client_name": brand_name,
         "market_competitors": competitors_list,
@@ -526,6 +657,19 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         "sentiment_by_category": by_cat,
         "topics_top5": top5,
         "topics_bottom5": bottom5,
+        # Cambios y tendencias
+        "trends": {
+            "anomalies": anomalies,
+            "momentum": {
+                "sov_delta": float(sov_delta) if sov_delta is not None else None,
+                "sentiment_delta": float(sent_delta) if sent_delta is not None else None,
+                "visibility_delta": float(vis_delta) if vis_delta is not None else None,
+            },
+        },
+        "previous_period": {
+            "start_date": prev_start_date,
+            "end_date": prev_end_date,
+        },
     }
 
     # Nivel 1: análisis por cluster
@@ -557,11 +701,51 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             backend_dir = os.path.dirname(os.path.dirname(__file__))  # backend/src
             files_dir = os.path.join(os.path.dirname(backend_dir), "files")  # backend/files
             os.makedirs(files_dir, exist_ok=True)
-            fname = f"insights_extraction_p{project_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.json"
+            fname = f"insights_extraction_p{project_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
             with open(os.path.join(files_dir, fname), "w", encoding="utf-8") as f:
                 json.dump(insights_json, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    # Catálogo de evidencias a partir de clusters
+    try:
+        evidence_catalog: dict[str, str] = {}
+        evidence_index: list[dict[str, str]] = []
+        for c in (clusters or [])[:12]:
+            topic = str(c.get("topic_name") or c.get("label") or "(sin tema)")
+            for ex in (c.get("example_mentions") or [])[:3]:
+                mid = str(ex.get("id") or "").strip()
+                if not mid:
+                    continue
+                snippet = str((ex.get("summary") or ex.get("text") or "")[:300])
+                if mid not in evidence_catalog:
+                    evidence_catalog[mid] = snippet
+                    evidence_index.append({"id": mid, "topic": topic, "snippet": snippet})
+    except Exception:
+        evidence_catalog, evidence_index = {}, []
+
+    # 1.5) Challenger: depurar oportunidades/risks/recomendaciones
+    refined = {}
+    try:
+        challenger_input = {
+            "client_name": aggregated.get("client_name"),
+            "opportunities": insights_json.get("opportunities", []),
+            "risks": insights_json.get("risks", []),
+            "recommendations": insights_json.get("recommendations", []),
+            "recommendations_structured": [],
+            "evidence_catalog": evidence_catalog,
+        }
+        ch_prompt = s_prompts.get_challenger_critique_prompt(challenger_input, client_name=aggregated.get("client_name"))
+        ch_raw = fetch_response(ch_prompt, model="gpt-4o", temperature=0.2, max_tokens=1200)
+        if ch_raw:
+            t = ch_raw.strip()
+            if t.startswith("```json"):
+                t = t[len("```json"):].strip();
+                if t.endswith("```"):
+                    t = t[:-3].strip()
+            refined = json.loads(t)
+    except Exception:
+        refined = {}
 
     # 2) Generar todos los textos especialistas para Parte 2 usando el JSON de insights
     strategic_sections = _generate_full_part2_texts(insights_json, aggregated)
@@ -608,6 +792,27 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
     except Exception:
         images["wordcloud"] = None
 
+    # Preparar tabla de plan a partir de recomendaciones estructuradas refinadas
+    def _normalize_plan_item(it: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "action": it.get("action") or it.get("recommendation") or "",
+            "impact": it.get("impact"),
+            "effort": it.get("effort"),
+            "owner": it.get("owner"),
+            "due": it.get("due") or it.get("timeline"),
+            "probability": it.get("probability"),
+            "confidence": it.get("confidence"),
+        }
+
+    structured_recs = []
+    try:
+        structured_recs = [
+            _normalize_plan_item(x) for x in (refined.get("recommendations_refined") or insights_json.get("recommendations_structured") or [])
+            if isinstance(x, dict)
+        ]
+    except Exception:
+        structured_recs = []
+
     content_for_pdf: Dict[str, Any] = {
         "strategic": strategic_sections,
         "kpi_rows": _build_kpi_rows(aggregated["kpis"]),
@@ -621,6 +826,9 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
         "clusters_synthesis": synthesis,
         # Pasamos deep_dives si el agregador los incluyó (backend app.py v1)
         "deep_dives": aggregated.get("deep_dives", []),
+        # Nueva tabla de plan y anexo de evidencias
+        "action_plan_table": structured_recs,
+        "evidence_annex": evidence_index,
         "annex": {
             "evolution_text": "",
             "category_text": "",
@@ -676,8 +884,16 @@ def generate_report(project_id: int, clusters: List[Dict[str, Any]] | None = Non
             "kpis": aggregated.get("kpis", {}),
             "period": {"start": start_date, "end": end_date},
             "competitors": competitors_list,
-            "ai_engines": ["OpenAI GPT-4o"],
+            "ai_engines": (ai_engines_used if ai_engines_used else ["OpenAI GPT-4o"]),
             "scope": "Nacional",
+            # Deltas y tabla de plan para dashboard
+            "deltas": {
+                "sov": float(sov_delta) if sov_delta is not None else None,
+                "sentiment": float(sent_delta) if sent_delta is not None else None,
+                "visibility": float(vis_delta) if vis_delta is not None else None,
+            },
+            "action_plan_table": structured_recs,
+            "evidence_annex": evidence_index,
         },
     }
 

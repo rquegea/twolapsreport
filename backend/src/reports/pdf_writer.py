@@ -42,15 +42,15 @@ class ReportPDF(FPDF):
             h = 6
             # Competidor
             self.multi_cell(col_widths[0], h, comp, border=1)
-            x1 = self.get_x(); y1 = self.get_y()
+            y1 = self.get_y()
             self.set_xy(x + col_widths[0], y)
             # Debilidad
             self.multi_cell(col_widths[1], h, topic, border=1)
-            x2 = self.get_x(); y2 = self.get_y()
+            y2 = self.get_y()
             self.set_xy(x + col_widths[0] + col_widths[1], y)
             # Conteo
             self.multi_cell(col_widths[2], h, count, border=1, align='C')
-            x3 = self.get_x(); y3 = self.get_y()
+            y3 = self.get_y()
             self.set_xy(x + col_widths[0] + col_widths[1] + col_widths[2], y)
             # Acción
             self.multi_cell(col_widths[3], h, action, border=1)
@@ -58,6 +58,56 @@ class ReportPDF(FPDF):
             # Ajustar a la mayor altura
             max_y = max(y1, y2, y3, y4)
             self.set_xy(x, max_y)
+
+    def write_action_plan_table(self, items: List[Dict[str, str]]):
+        if not items:
+            return
+        self.add_page()
+        self.set_font("Helvetica", "B", 14)
+        self.cell(0, 10, "Plan de Acción (Tabla)", 0, 1, "L")
+        self.ln(2)
+        headers = ["Acción", "Impacto", "Esfuerzo", "Owner", "Due", "Prob.", "Conf."]
+        widths = [70, 18, 20, 30, 20, 16, 16]
+        self.set_font("Helvetica", "B", 9)
+        self.set_fill_color(230, 230, 230)
+        for h, w in zip(headers, widths):
+            self.cell(w, 7, _sanitize(h), 1, 0, 'C', True)
+        self.ln()
+        self.set_font("Helvetica", size=9)
+        for it in items[:20]:
+            row = [
+                _sanitize(str(it.get("action", ""))[:180]),
+                _sanitize(str(it.get("impact", ""))),
+                _sanitize(str(it.get("effort", ""))),
+                _sanitize(str(it.get("owner", ""))),
+                _sanitize(str(it.get("due", ""))),
+                _sanitize(str(it.get("probability", ""))),
+                _sanitize(str(it.get("confidence", ""))),
+            ]
+            x0, y0 = self.get_x(), self.get_y()
+            self.multi_cell(widths[0], 6, row[0], border=1)
+            y_end = self.get_y(); self.set_xy(x0 + widths[0], y0)
+            for i in range(1, len(widths)):
+                self.multi_cell(widths[i], 6, row[i], border=1, align='C')
+                y_end = max(y_end, self.get_y())
+                if i < len(widths) - 1:
+                    self.set_xy(self.get_x(), y0)
+            self.set_xy(x0, y_end)
+
+    def write_evidence_annex(self, items: List[Dict[str, str]]):
+        if not items:
+            return
+        self.add_page()
+        self.set_font("Helvetica", "B", 14)
+        self.cell(0, 10, "Anexo de Evidencias (muestras anónimas)", 0, 1, "L")
+        self.ln(2)
+        self.set_font("Helvetica", size=10)
+        for it in items[:60]:
+            ident = _sanitize(str(it.get("id", "")))
+            topic = _sanitize(str(it.get("topic", "")))
+            snip = _sanitize(str(it.get("snippet", "")))
+            self.multi_cell(0, 5, f"[{ident}] ({topic}) \n\u2014 {snip}")
+            self.ln(1)
 
 
 def _sanitize(text: str) -> str:
@@ -498,6 +548,38 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
     _write_index_block("Parte 1: Resumen Visual y KPIs", parte1)
     _write_index_block("Parte 2: Informe Estratégico", parte2)
 
+    # 2.1) Dashboard Ejecutivo (Qué cambió)
+    try:
+        pdf.add_page()
+        add_title(pdf, "Dashboard Ejecutivo — Qué cambió")
+        deltas = (strategic or {}).get("deltas") if isinstance(strategic, dict) else None
+        k = (strategic or {}).get("kpis") if isinstance(strategic, dict) else None
+        rows: List[List[str]] = []
+        if isinstance(k, dict):
+            sov = k.get("share_of_voice") or k.get("sov")
+            sent = k.get("average_sentiment") or k.get("sentiment_avg")
+            rows.append(["Share of Voice", f"{float(sov or 0.0):.1f}%", ""]) 
+            rows.append(["Sentimiento", f"{float(sent or 0.0):.2f}", ""]) 
+        if isinstance(deltas, dict):
+            def _fmt_delta(x):
+                try:
+                    return ("▲" if float(x) > 0 else ("▼" if float(x) < 0 else "=")) + f" {float(x):+.2f}"
+                except Exception:
+                    return "N/D"
+            # Sobrescribir tercera columna con MoM/WoW
+            if rows:
+                if deltas.get("sov") is not None:
+                    rows[0][2] = _fmt_delta(deltas.get("sov"))
+                if deltas.get("sentiment") is not None and len(rows) > 1:
+                    rows[1][2] = _fmt_delta(deltas.get("sentiment"))
+            # Visibilidad como fila adicional
+            if deltas.get("visibility") is not None:
+                rows.append(["Visibilidad (media)", "—", _fmt_delta(deltas.get("visibility"))])
+        if rows:
+            add_table(pdf, [["Métrica", "Valor", "Δ Previo"]] + rows)
+    except Exception:
+        pass
+
     # Ficha técnica
     try:
         pdf.add_page()
@@ -563,6 +645,11 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
         _write_section_page(s)
         if strategic:
             if s == "Plan de Acción Estratégico":
+                # Tabla si existe
+                items = (strategic.get("action_plan_table") or []) if isinstance(strategic.get("action_plan_table"), list) else []
+                if items:
+                    pdf.write_action_plan_table(items)  # type: ignore[attr-defined]
+                # Texto de apoyo si existe
                 text = (strategic.get("action_plan") or "").strip()
                 if text:
                     add_paragraph(pdf, text)
@@ -596,6 +683,13 @@ def build_skeleton_with_content(company_name: str, images: Dict[str, Optional[st
                 text = (strategic.get("correlations") or "").strip()
                 if text:
                     add_paragraph(pdf, text)
+    # Evidencias (si vienen)
+    try:
+        ev = (strategic or {}).get("evidence_annex") if isinstance(strategic, dict) else None
+        if isinstance(ev, list) and ev:
+            pdf.write_evidence_annex(ev)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     # Eliminado Parte 3 según solicitud
 
     out = pdf.output(dest="S")

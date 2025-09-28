@@ -736,8 +736,6 @@ def get_visibility_series(
                             WHERE LOWER(TRIM(kt)) = ANY(:syns)
                         )
                         OR LOWER(COALESCE(m.response,'')) LIKE ANY(:likes)
-                        OR LOWER(COALESCE(m.source_title,'')) LIKE ANY(:likes)
-                        OR LOWER(TRIM(COALESCE(q.brand, q.topic, ''))) = ANY(:syns)
                         OR EXISTS (
                             SELECT 1 FROM jsonb_array_elements(COALESCE(i.payload->'brands','[]'::jsonb)) b
                             WHERE LOWER(TRIM(CASE WHEN jsonb_typeof(b)='object' THEN COALESCE(b->>'name','') ELSE TRIM(BOTH '"' FROM b::text) END)) = ANY(:syns)
@@ -904,13 +902,19 @@ def get_visibility_ranking(
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> list[tuple[str, float]]:
-    """Ranking de visibilidad: porcentaje de apariciones por marca sobre total de respuestas, acotado al mercado si se indica project_id."""
+    """
+    Ranking de visibilidad alineado con la definición del gráfico diario.
+
+    Cálculo: porcentaje de pares (día, query_id) del periodo en los que aparece
+    la marca al menos una vez. Esto replica exactamente la metodología usada en
+    `get_visibility_series` pero agregada al periodo completo y por marca.
+    """
     own_session = False
     if session is None:
         session = get_session()
         own_session = True
     try:
-        # Traer también key_topics para replicar la detección del endpoint
+        # Traer campos necesarios, incluyendo fecha y query_id
         where = [
             "m.created_at >= CAST(:start_date AS date)",
             "m.created_at < (CAST(:end_date AS date) + INTERVAL '1 day')",
@@ -922,6 +926,8 @@ def get_visibility_ranking(
         sql = text(
             f"""
             SELECT
+              DATE(m.created_at) AS d,
+              m.query_id AS qid,
               m.key_topics,
               LOWER(COALESCE(m.response,'')) AS resp,
               LOWER(COALESCE(m.source_title,'')) AS title,
@@ -933,11 +939,17 @@ def get_visibility_ranking(
             """
         )
         rows = session.execute(sql, params).mappings().all()
-        from collections import Counter
-        total_by_brand: Counter[str] = Counter()
-        # Sinónimos normalizados
+
+        # Sinónimos normalizados (canónico -> variantes en minúsculas)
         norm_synonyms: Dict[str, list[str]] = {c: [c.lower()] + [s.lower() for s in alts] for c, alts in BRAND_SYNONYMS.items()}
+
+        # Conjuntos de pares (día, query) totales y con marca detectada
+        all_pairs: set[tuple[str, int]] = set()
+        day_query_hits: Dict[tuple[str, int], set[str]] = {}
+
         for r in rows:
+            d: str = str(r.get("d"))
+            qid: int = int(r.get("qid") or 0)
             payload = r.get("payload") or {}
             resp = (r.get("resp") or "").lower()
             title = (r.get("title") or "").lower()
@@ -958,17 +970,32 @@ def get_visibility_ranking(
                                 payload_brands.append(name)
                         elif isinstance(b, str):
                             payload_brands.append(b.strip().lower())
-            detected: list[str] = []
+
+            detected: set[str] = set()
             for canon, syns in norm_synonyms.items():
                 for s in syns:
                     if s in try_topics or (s and (s in resp or s in title or s in payload_brands)):
-                        detected.append(canon)
+                        detected.add(canon)
                         break
-            for canon in set(detected):
-                total_by_brand[canon] += 1
-        total_responses = len(rows) or 1
+            key = (d, qid)
+            all_pairs.add(key)
+            if detected:
+                if key not in day_query_hits:
+                    day_query_hits[key] = set()
+                day_query_hits[key].update(detected)
+
+        # Denominador: número de pares (día, query) en el periodo
+        total_pairs = max(1, len(all_pairs))
+
+        # Contabilizar por marca en pares únicos
+        from collections import Counter
+        total_by_brand: Counter[str] = Counter()
+        for brands in day_query_hits.values():
+            for b in brands:
+                total_by_brand[b] += 1
+
         pairs = sorted(total_by_brand.items(), key=lambda x: x[1], reverse=True)
-        return [(name, round(100.0 * cnt / total_responses, 1)) for name, cnt in pairs]
+        return [(name, round(100.0 * cnt / float(total_pairs), 1)) for name, cnt in pairs]
     finally:
         if own_session:
             session.close()
